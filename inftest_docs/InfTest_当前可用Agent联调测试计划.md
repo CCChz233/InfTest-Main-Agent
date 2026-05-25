@@ -16,13 +16,17 @@
 用户任务
   -> InfTest 主 Agent 生成手工测试计划
   -> 写入 device_case_bind.json
-  -> 调用用例执行 Agent
+  -> CLI 调用用例执行 Agent
   -> 整理 case_result.json / summary.json
-  -> 调用报告生成 Agent
+  -> CLI 调用报告生成 Agent
   -> 返回 SUCCESS / FAILED 和产物路径
 ```
 
 原来的 deterministic fake E2E 不变，仍用 `make fake-e2e` 验收基础闭环。
+
+明天服务器联调优先看：[InfTest 服务器部署联调手册](./InfTest_服务器部署联调手册.md)。
+
+> 注意：真实执行 Agent 和报告 Agent 是 CLI 调用，不是 HTTP 调用。HTTP 只是未来平台启动 InfTest 主 Agent 的外部入口。
 
 ## 2. 本轮新增的运行入口
 
@@ -32,7 +36,7 @@ make available-agents-e2e
 
 默认情况下，这个命令会使用现有 fake 执行/报告 Agent 做本地烟测，验证“跳过用例生成 Agent”的编排链路本身可跑通。
 
-真实 Agent 联调时，建议只在本次命令中指定 `.inftest/config.available-agents.example.json`，避免影响 `make fake-e2e`：
+真实 Agent 联调时，建议只在本次命令中指定 `.inftest/config.available-agents.example.json`，避免影响 `make fake-e2e`。该配置会让 `SubAgentAdapter` 改为调用真实 Agent 适配脚本：
 
 ```json
 {
@@ -207,7 +211,8 @@ export INFTEST_EXECUTION_AGENT_CWD=/root/inftest_execute_agent
 export INFTEST_REPORT_AGENT_CWD=/path/to/report_agent
 export INFTEST_REQUIREMENT_DOC=/path/to/requirements.docx
 
-INFTEST_CONFIG=.inftest/config.available-agents.example.json make available-agents-e2e
+INFTEST_CONFIG=.inftest/config.available-agents.example.json \
+bun run scripts/inftest_available_agents_e2e.ts --task-id task-server-001 --timeout-seconds 900
 ```
 
 预期：

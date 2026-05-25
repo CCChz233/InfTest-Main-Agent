@@ -1,7 +1,9 @@
 # CCB InfTest Demo 操作手册
 
-> 更新日期：2026-05-19  
+> 更新日期：2026-05-25  
 > 快速索引见根目录 [README](../README.md#inftest-mvp-使用方式)
+
+> 服务器真实 Agent 联调请优先看：[InfTest 服务器部署联调手册](./InfTest_服务器部署联调手册.md)
 
 
 ## 0. 文件配置（模型 API）
@@ -79,7 +81,7 @@ make available-agents-e2e
 .inftest-workspace/task-available-001/analysis/report.md
 ```
 
-接真实执行/报告 Agent 时，使用 `.inftest/config.available-agents.example.json` 作为本次命令配置，并设置真实 Agent 路径：
+真实业务 Agent 是 **CLI 子进程调用**，不是 HTTP 调用。接真实执行/报告 Agent 时，使用 `.inftest/config.available-agents.example.json` 作为本次命令配置，并设置真实 Agent 路径：
 
 ```bash
 export INFTEST_EXECUTION_AGENT_CWD=/root/inftest_execute_agent
@@ -87,6 +89,8 @@ export INFTEST_REPORT_AGENT_CWD=/path/to/report_agent
 export INFTEST_REQUIREMENT_DOC=/path/to/requirements.docx
 INFTEST_CONFIG=.inftest/config.available-agents.example.json make available-agents-e2e
 ```
+
+服务器上优先跑 CLI 链路，确认成功后再考虑 HTTP 平台入口。
 
 详细计划见 [InfTest 当前可用 Agent 联调测试计划](./InfTest_当前可用Agent联调测试计划.md)。
 
@@ -211,7 +215,8 @@ SSE 每条 `data:` 形如：
 
 ## 8. 当前未实现
 
-- 真实子 Agent（测试生成 / 设备调度 / 执行 / 分析）
+- 真实用例生成 Agent、真实设备调度 Agent
+- 真实执行 Agent / 报告 Agent 已有适配脚本，但尚未在服务器完成联调验收
 - `/tasks/chat/stream` 完整生产能力（会话恢复、与执行中任务联动等）
 - 真实设备控制与平台设备池
 - 深度 PAUSE/CONTINUE（模型流中断、真实执行 Agent 暂停恢复）

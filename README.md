@@ -139,6 +139,7 @@ FEATURE_BUDDY=1 FEATURE_FORK_SUBAGENT=1 bun run dev
 InfTest 是在 CCB 仓库内嵌入的 **测试任务编排 MVP**：将 CCB 作为 Planner/Reflection 主 Agent 运行时，通过 HTTP API 或命令行脚本跑通「查任务 → 建 workspace → 生成计划 → 调 fake 子 Agent → 监听结果 → 上报 SUCCESS」的闭环。
 
 > 设计文档与开发进度见 [`inftest_docs/`](inftest_docs/)，详细命令示例见 [`inftest_docs/CCB_InfTest_操作手册.md`](inftest_docs/CCB_InfTest_操作手册.md)。
+> 服务器部署和真实 CLI Agent 联调优先看 [`inftest_docs/InfTest_服务器部署联调手册.md`](inftest_docs/InfTest_服务器部署联调手册.md)。
 
 ### 前置条件
 

@@ -30,6 +30,8 @@
   - `package.json` 脚本 `inftest:server`
 - 已新增根目录 `Makefile`，统一封装 `typecheck`、`build`、`dev`、`fake-e2e`、`server`。
 - 已新增 demo 操作手册：`inftest_docs/CCB_InfTest_操作手册.md`。
+- 已新增 InfTest 文档索引：`inftest_docs/README.md`。
+- 已新增服务器部署联调手册：`inftest_docs/InfTest_服务器部署联调手册.md`。
 - 已新增 demo 测试用例文档：`inftest_docs/InfTest_Demo_测试用例.md`。
 - 已新增当前可用 Agent 联调测试计划：`inftest_docs/InfTest_当前可用Agent联调测试计划.md`。
 - 已实现 `SubAgentAdapter` 的 `timeout_seconds` 和运行中子进程登记。
@@ -114,10 +116,22 @@
 
 ## 下一步
 
-- 用可用模型环境跑 `INFTEST_RUNNER=query make server`，验证真实模型能通过 `/task START` 主动调用 `run_fake_e2e`。
-- 在真实 Agent 所在机器上运行 `make available-agents-e2e`，验证“手工测试计划 -> 执行 Agent -> 报告 Agent”链路。
-- 将 `/chat/stream` 从占位响应接到 headless `QueryEngine` 流式输出，而不是接 deterministic fake runner。
-- 完成 M7 的真实暂停/继续/终止语义，尤其是长时间运行子进程的 kill 和状态同步。
+明天优先做服务器真实 Agent CLI 联调，不先扩 HTTP 平台入口：
+
+1. 在服务器拉取 GitHub 仓库并安装依赖。
+2. 运行 `bun run typecheck` 和 `bun run scripts/inftest_fake_e2e.ts`，确认主项目在服务器可运行。
+3. 单独运行真实用例执行 Agent 原始 CLI 命令，确认设备、模型、环境可用。
+4. 单独运行真实报告生成 Agent 原始 CLI 命令，确认 `requirements.docx` 和输出目录可用。
+5. 设置 `INFTEST_EXECUTION_AGENT_*`、`INFTEST_REPORT_AGENT_*`、`INFTEST_REQUIREMENT_DOC` 等环境变量。
+6. 运行：
+
+```bash
+INFTEST_CONFIG=.inftest/config.available-agents.example.json \
+bun run scripts/inftest_available_agents_e2e.ts --task-id task-server-001 --timeout-seconds 900
+```
+
+7. 检查 `.inftest-workspace/task-server-001/` 下执行日志、`case_result.json`、`summary.json`、`analysis/report.md`。
+8. CLI 链路成功后，再考虑 HTTP server 和平台入口。
 
 ## 未完成进度
 
