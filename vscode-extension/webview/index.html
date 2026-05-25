@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none';
+             style-src 'nonce-{{nonce}}' {{highlightCssUri}};
+             script-src 'nonce-{{nonce}}';
+             connect-src ws://127.0.0.1:*;
+             font-src vscode-resource:;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="{{highlightCssUri}}">
+  <link rel="stylesheet" nonce="{{nonce}}" href="{{styleCssUri}}">
+  <title>Claude Chat</title>
+</head>
+<body>
+  <div id="app">
+    <div id="messages"></div>
+    <div id="context-chips"></div>
+    <div id="input-area">
+      <textarea id="input" placeholder="Message Claude... (Enter to send, Shift+Enter for newline)" rows="3"></textarea>
+      <button id="send-btn">Send</button>
+    </div>
+    <div id="status-bar"></div>
+  </div>
+
+  <script nonce="{{nonce}}" src="{{markedUri}}"></script>
+  <script nonce="{{nonce}}" src="{{highlightJsUri}}"></script>
+  <script nonce="{{nonce}}" src="{{chatJsUri}}"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+{
+  "name": "claude-code-chat",
+  "displayName": "Claude Code Chat",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudeChat",
+          "title": "Claude Chat",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "views": {
+      "claudeChat": [
+        { "type": "webview", "id": "claudeChat.panel", "name": "Claude" }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Code Chat",
+      "properties": {
+        "claudeCode.autoApproveTools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Tool names to auto-approve without confirmation"
+        },
+        "claudeCode.maxHistoryMessages": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum chat messages to persist"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

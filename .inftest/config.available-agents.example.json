@@ -1,0 +1,12 @@
+{
+  "subagents": {
+    "test_executor": {
+      "command": "python3",
+      "args": ["scripts/inftest_real_execution_agent_adapter.py"]
+    },
+    "result_analyzer": {
+      "command": "python3",
+      "args": ["scripts/inftest_real_report_agent_adapter.py"]
+    }
+  }
+}

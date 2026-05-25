@@ -1,0 +1,26 @@
+{
+  "provider": "anthropic",
+  "orchestration": "aggregate",
+  "runner": "query",
+  "model": {
+    "api_key": "sk-ant-api03-REPLACE_ME",
+    "base_url": "https://api.anthropic.com",
+    "name": "claude-sonnet-4-20250514"
+  },
+  "proxy": {
+    "base_url": "https://your-planner-proxy.example.com",
+    "task_report_path": "api/inftest/task_report"
+  },
+  "subagents": {
+    "test_generation": {
+      "command": "python3",
+      "args": ["mock_agents/fake_case_generation_agent.py"]
+    }
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "workspace_root": ".inftest-workspace",
+  "python_bin": "python3"
+}
