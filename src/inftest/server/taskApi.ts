@@ -1,10 +1,10 @@
 import { z } from 'zod/v4'
-import {
-  DEFAULT_INFTEST_FAKE_TASK_ID,
-  runInfTestFakeE2E,
-} from '../FakeE2ERunner.js'
+import { runInfTestAvailableAgentsE2E } from '../AvailableAgentsRunner.js'
+import { runInfTestFakeE2E } from '../FakeE2ERunner.js'
 import { InfTestQueryRunner } from '../InfTestQueryRunner.js'
 import { InfTestStepwiseQueryRunner } from '../InfTestStepwiseQueryRunner.js'
+import { InvalidInfTestStateTransitionError } from '../InfTestStateMachine.js'
+import { runInfTestStatefulRunner } from '../StatefulRunner.js'
 import { bootstrapInfTestHeadless } from '../headlessBootstrap.js'
 import {
   AlterTaskRequestSchema,
@@ -22,9 +22,15 @@ import {
   sessionToTaskDetail,
 } from './apiResponse.js'
 import {
+  handlePlannerApiStubRequest,
+  isPlannerApiStubPath,
+} from './plannerApiStub.js'
+import {
   buildTaskMessage,
+  finishSessionFromAvailableResult,
   finishSessionFromFakeResult,
   finishSessionFromQueryResult,
+  finishSessionFromStatefulResult,
   TaskSessionManager,
   TaskSessionNotFoundError,
   toTaskResponse,
@@ -46,13 +52,22 @@ async function readJson(request: Request): Promise<unknown> {
 }
 
 function readRunnerMode(): InfTestRunnerMode {
-  return process.env.INFTEST_RUNNER === 'query' ? 'query' : 'fake'
+  if (process.env.INFTEST_STATEFUL_RUNNER === '1') return 'stateful'
+  if (process.env.INFTEST_RUNNER === 'stateful') return 'stateful'
+  if (process.env.INFTEST_RUNNER === 'query') return 'query'
+  if (process.env.INFTEST_RUNNER === 'available') return 'available'
+  return 'fake'
 }
 
 function readOrchestration(): 'aggregate' | 'stepwise' {
   return process.env.INFTEST_ORCHESTRATION === 'stepwise'
     ? 'stepwise'
     : 'aggregate'
+}
+
+function readAvailableTimeoutSeconds(): number {
+  const value = Number(process.env.INFTEST_TIMEOUT_SECONDS ?? 900)
+  return Number.isFinite(value) ? value : 900
 }
 
 function parseTaskIdFromPath(pathname: string): string | null {
@@ -90,6 +105,7 @@ function startDataFromSession(
   return {
     task_id: response.task_id,
     task_status: response.status,
+    current_stage: session.current_stage,
     workspace: response.workspace,
     runner: response.runner,
     artifacts: response.artifacts,
@@ -131,7 +147,8 @@ async function handleTaskStart(
         })) ?? []
       const data = startDataFromSession(session, {
         orchestration: queryResult.orchestration ?? orchestration,
-        steps: orchestration === 'aggregate' ? steps : steps.length > 0 ? steps : [],
+        steps:
+          orchestration === 'aggregate' ? steps : steps.length > 0 ? steps : [],
       })
       const message =
         queryResult.final_model_reply && session.status === 'SUCCESS'
@@ -144,6 +161,60 @@ async function handleTaskStart(
     } finally {
       taskSessionManager.endQueryAbortScope(taskId)
     }
+  }
+
+  if (runner === 'available') {
+    const availableResult = await runInfTestAvailableAgentsE2E({
+      task_id: taskId,
+      timeout_seconds: readAvailableTimeoutSeconds(),
+    })
+    const session = finishSessionFromAvailableResult(
+      taskSessionManager,
+      taskId,
+      availableResult,
+    )
+    const data = startDataFromSession(session, {
+      orchestration: 'aggregate',
+      steps: availableResult.steps.map(s => ({
+        name: s.name,
+        status: s.status,
+        duration_ms: s.duration_ms,
+        message: s.message,
+      })),
+    })
+    const message = buildTaskMessage(session)
+    if (session.status === 'SUCCESS') {
+      return jsonApiResponse(apiSuccess(data, message))
+    }
+    return jsonApiResponse(apiError(500, message), 500)
+  }
+
+  if (runner === 'stateful') {
+    const statefulResult = await runInfTestStatefulRunner({
+      task_id: taskId,
+      timeout_seconds: readAvailableTimeoutSeconds(),
+      session_manager: taskSessionManager,
+    })
+    const session = finishSessionFromStatefulResult(
+      taskSessionManager,
+      taskId,
+      statefulResult,
+    )
+    const data = startDataFromSession(session, {
+      orchestration: 'stateful',
+      steps: statefulResult.steps.map(s => ({
+        name: s.name,
+        status: s.status,
+        duration_ms: s.duration_ms,
+        message: s.message,
+      })),
+      current_stage: session.current_stage,
+    })
+    const message = buildTaskMessage(session)
+    if (session.status === 'SUCCESS') {
+      return jsonApiResponse(apiSuccess(data, message))
+    }
+    return jsonApiResponse(apiError(500, message), 500)
   }
 
   const fakeResult = await runInfTestFakeE2E({ task_id: taskId })
@@ -206,6 +277,9 @@ async function handleTasksAlter(request: Request): Promise<Response> {
     if (error instanceof TaskSessionNotFoundError) {
       return taskNotFoundResponse(error.taskId)
     }
+    if (error instanceof InvalidInfTestStateTransitionError) {
+      return invalidRequestResponse(error.message)
+    }
     throw error
   }
 }
@@ -228,6 +302,9 @@ async function handleTasksTerminate(request: Request): Promise<Response> {
     if (error instanceof TaskSessionNotFoundError) {
       return taskNotFoundResponse(error.taskId)
     }
+    if (error instanceof InvalidInfTestStateTransitionError) {
+      return invalidRequestResponse(error.message)
+    }
     throw error
   }
 }
@@ -236,6 +313,10 @@ export async function handleInfTestTaskApiRequest(
   request: Request,
 ): Promise<Response> {
   const url = new URL(request.url)
+
+  if (isPlannerApiStubPath(url.pathname)) {
+    return handlePlannerApiStubRequest(request)
+  }
 
   if (url.pathname === '/health') {
     if (request.method !== 'GET') {

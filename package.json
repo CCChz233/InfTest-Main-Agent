@@ -64,7 +64,9 @@
     "rcs": "bun run scripts/rcs.ts",
     "inftest:query-e2e": "bun run scripts/inftest_query_e2e.ts",
     "inftest:api-e2e-fake": "bun run scripts/inftest_api_e2e_fake.ts",
-    "inftest:api-e2e-query": "bun run scripts/inftest_api_e2e_query.ts"
+    "inftest:api-e2e-query": "bun run scripts/inftest_api_e2e_query.ts",
+    "inftest:mock-backend": "bun run scripts/inftest_mock_backend_api.ts",
+    "inftest:mock-backend-query-e2e": "bun run scripts/inftest_mock_backend_query_e2e.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.19.0",

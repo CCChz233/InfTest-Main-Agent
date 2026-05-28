@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "agent_name": "device_scheduler",
+  "status": "SUCCESS",
+  "task_id": "task-postman-direct-001",
+  "artifacts": {
+    "device_bindings": "/Users/chz/workspace/inftest-runtime/InfTest-Main-Agent/.inftest-workspace/task-postman-direct-001/device_scheduling/device_bindings.json"
+  },
+  "metrics": {
+    "duration_ms": 0
+  },
+  "error": null
+}

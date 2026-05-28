@@ -31,6 +31,13 @@ def find_first(patterns: list[str], root: Path) -> Path | None:
     return None
 
 
+def error_tail(*values: str, limit: int = 800) -> str:
+    text = "\n".join(value.strip() for value in values if value and value.strip())
+    if not text:
+        return ""
+    return text[-limit:]
+
+
 def build_command(log_file: Path, output_dir: Path) -> tuple[list[str], Path | None]:
     agent_cwd_value = os.environ.get("INFTEST_REPORT_AGENT_CWD", "").strip()
     if not agent_cwd_value:
@@ -151,6 +158,10 @@ def main() -> int:
     stderr_path.write_text(proc.stderr, encoding="utf-8")
 
     if proc.returncode != 0:
+        detail = error_tail(proc.stderr, proc.stdout)
+        message = f"Report agent exited with code {proc.returncode}."
+        if detail:
+            message = f"{message} {detail}"
         write_json(
             output_json,
             {
@@ -166,7 +177,7 @@ def main() -> int:
                 "metrics": {"duration_ms": int((time.time() - started) * 1000)},
                 "error": {
                     "code": "REPORT_AGENT_FAILED",
-                    "message": f"Report agent exited with code {proc.returncode}.",
+                    "message": message,
                 },
             },
         )

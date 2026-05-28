@@ -1,10 +1,15 @@
+import { existsSync } from 'fs'
+import { join } from 'path'
 import { WorkspaceManager } from './adapters/WorkspaceManager.js'
+import { InfTestStateMachine } from './InfTestStateMachine.js'
 import {
   getRunningSubAgentKeys,
   terminateRunningSubAgents,
 } from './adapters/SubAgentAdapter.js'
+import type { InfTestAvailableAgentsE2EResult } from './AvailableAgentsRunner.js'
 import type { InfTestFakeE2EResult } from './FakeE2ERunner.js'
 import type { InfTestQueryRunnerResult } from './InfTestQueryRunner.js'
+import type { InfTestStatefulRunnerResult } from './StatefulRunner.js'
 import type {
   InfTestRunnerMode,
   InfTestTaskResponse,
@@ -17,8 +22,37 @@ const sessions = new Map<string, TaskSession>()
 
 const queryAbortControllers = new Map<string, AbortController>()
 
+const STANDARD_ARTIFACTS: [string, string][] = [
+  ['plan', 'plan.json'],
+  ['test_generation_result', join('case_generation', 'result.json')],
+  ['test_cases', join('case_generation', 'test_cases.json')],
+  ['device_scheduling_result', join('device_scheduling', 'result.json')],
+  ['device_case_bind', join('device_scheduling', 'device_case_bind.json')],
+  ['device_bindings', join('device_scheduling', 'device_bindings.json')],
+  ['execution_result', join('execution', 'result.json')],
+  ['execution_summary', join('execution', 'results', 'summary.json')],
+  ['report_agent_log', join('execution', 'results', 'case_result.json')],
+  ['analysis_result', join('analysis', 'result.json')],
+  ['analysis_report_json', join('analysis', 'report.json')],
+  ['analysis_report', join('analysis', 'report.md')],
+]
+
 function resolveWorkspace(taskId: string, workspace?: string): string {
   return workspace ?? new WorkspaceManager().getTaskWorkspace(taskId)
+}
+
+function collectExistingArtifacts(
+  workspace: string | undefined,
+): Record<string, string> {
+  if (!workspace) return {}
+  const artifacts: Record<string, string> = {}
+  for (const [key, relativePath] of STANDARD_ARTIFACTS) {
+    const artifactPath = join(workspace, relativePath)
+    if (existsSync(artifactPath)) {
+      artifacts[key] = artifactPath
+    }
+  }
+  return artifacts
 }
 
 export function buildTaskMessage(session: TaskSession): string {
@@ -28,9 +62,14 @@ export function buildTaskMessage(session: TaskSession): string {
   switch (session.status) {
     case 'SUCCESS': {
       const artifactCount = Object.keys(session.artifacts).length
-      const invoked = session.run_fake_e2e_invoked
-        ? 'run_fake_e2e was invoked'
-        : 'deterministic fake workflow completed'
+      const invoked =
+        session.runner === 'available'
+          ? 'available CLI agents completed'
+          : session.runner === 'stateful'
+            ? 'stateful skills completed'
+            : session.run_fake_e2e_invoked
+              ? 'run_fake_e2e was invoked'
+              : 'deterministic fake workflow completed'
       return `InfTest task ${session.task_id} completed successfully (${session.runner} runner, ${invoked}, ${artifactCount} artifacts).`
     }
     case 'FAILED':
@@ -41,7 +80,9 @@ export function buildTaskMessage(session: TaskSession): string {
     case 'PAUSED':
       return `InfTest task ${session.task_id} is paused.`
     case 'RUNNING':
-      return `InfTest task ${session.task_id} is running.`
+      return session.current_stage
+        ? `InfTest task ${session.task_id} is running at ${session.current_stage}.`
+        : `InfTest task ${session.task_id} is running.`
     case 'TERMINATED':
       return `InfTest task ${session.task_id} was terminated.`
     case 'PENDING':
@@ -51,11 +92,18 @@ export function buildTaskMessage(session: TaskSession): string {
   }
 }
 
-export function toTaskSessionView(session: TaskSession): InfTestTaskSessionView {
+export function toTaskSessionView(
+  session: TaskSession,
+): InfTestTaskSessionView {
   return {
     task_id: session.task_id,
     runner: session.runner,
     status: session.status,
+    current_stage: session.current_stage,
+    previous_stage: session.previous_stage,
+    active_skill: session.active_skill,
+    blocking_reason: session.blocking_reason,
+    stage_history: session.stage_history,
     workspace: session.workspace,
     started_at: session.started_at,
     finished_at: session.finished_at,
@@ -85,6 +133,11 @@ export class TaskSessionManager {
       task_id: taskId,
       runner,
       status: 'RUNNING',
+      current_stage: null,
+      previous_stage: null,
+      active_skill: null,
+      blocking_reason: null,
+      stage_history: [],
       workspace: resolveWorkspace(taskId),
       started_at: new Date().toISOString(),
       finished_at: null,
@@ -139,28 +192,25 @@ export class TaskSessionManager {
     const existing = this.require(taskId)
     let terminatedSubagents: string[] = []
 
-    let status: TaskStatus
+    const stateMachine = new InfTestStateMachine()
+    let session: TaskSession
     switch (operation) {
       case 'PAUSE':
-        status = 'PAUSED'
+        session = stateMachine.pause(existing)
         break
       case 'CONTINUE':
-        status = 'RUNNING'
+        session = stateMachine.continue(existing)
         break
       case 'TERMINATE':
-        status = 'TERMINATED'
         this.abortActiveQuery(taskId)
         terminatedSubagents = terminateRunningSubAgents(taskId)
+        session = {
+          ...stateMachine.terminate(existing),
+          finished_at: new Date().toISOString(),
+        }
         break
     }
 
-    const session: TaskSession = {
-      ...existing,
-      status,
-      ...(operation === 'TERMINATE'
-        ? { finished_at: new Date().toISOString() }
-        : {}),
-    }
     sessions.set(taskId, session)
     return { session, terminated_subagents: terminatedSubagents }
   }
@@ -236,6 +286,34 @@ export function finishSessionFromFakeResult(
   })
 }
 
+export function finishSessionFromAvailableResult(
+  manager: TaskSessionManager,
+  taskId: string,
+  result: InfTestAvailableAgentsE2EResult,
+): TaskSession {
+  return manager.finish(taskId, {
+    status: result.status,
+    workspace: result.workspace,
+    artifacts: result.artifacts,
+    last_error: result.error,
+    run_fake_e2e_invoked: false,
+  })
+}
+
+export function finishSessionFromStatefulResult(
+  manager: TaskSessionManager,
+  taskId: string,
+  result: InfTestStatefulRunnerResult,
+): TaskSession {
+  return manager.finish(taskId, {
+    status: result.status,
+    workspace: result.workspace,
+    artifacts: result.artifacts,
+    last_error: result.error,
+    run_fake_e2e_invoked: false,
+  })
+}
+
 export function finishSessionFromQueryResult(
   manager: TaskSessionManager,
   taskId: string,
@@ -245,10 +323,16 @@ export function finishSessionFromQueryResult(
   const existing = manager.get(taskId)
   const lastError =
     result.status === 'FAILED'
-      ? result.errors.join('; ') || result.final_model_reply || 'query runner failed'
+      ? result.errors.join('; ') ||
+        result.final_model_reply ||
+        'query runner failed'
       : null
   const workspace = toolResult?.workspace ?? existing?.workspace
-  const artifacts = toolResult?.artifacts ?? existing?.artifacts ?? {}
+  const artifacts = {
+    ...collectExistingArtifacts(workspace),
+    ...(existing?.artifacts ?? {}),
+    ...(toolResult?.artifacts ?? {}),
+  }
   return manager.finish(taskId, {
     status: result.status,
     workspace,

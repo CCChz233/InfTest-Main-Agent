@@ -10,6 +10,11 @@ const session: TaskSession = {
   task_id: 'task-demo-001',
   runner: 'fake',
   status: 'SUCCESS',
+  current_stage: 'COMPLETED',
+  previous_stage: 'REFLECTING',
+  active_skill: null,
+  blocking_reason: null,
+  stage_history: [],
   workspace: '/tmp/task-demo-001',
   started_at: '2026-01-01T00:00:00.000Z',
   finished_at: '2026-01-01T00:01:00.000Z',
@@ -58,18 +63,19 @@ describe('streamInfTestChatChunks', () => {
     expect(chunks.map(c => c.chunk).join('')).toBe('任务已完成')
     expect(chunks.at(-1)?.finished).toBe(true)
     expect(chunks.every(c => c.message_id === 'msg-test-001')).toBe(true)
-    
+
     expect(chunks.every(c => c.task_id === session.task_id)).toBe(true)
   })
 
   test('extracts text_delta from stream_event', () => {
-    const text = internalInfTestChatStreamerTestUtils.extractTextDeltaFromStreamEvent({
-      type: 'stream_event',
-      event: {
-        type: 'content_block_delta',
-        delta: { type: 'text_delta', text: 'hello' },
-      },
-    } as SDKMessage)
+    const text =
+      internalInfTestChatStreamerTestUtils.extractTextDeltaFromStreamEvent({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'text_delta', text: 'hello' },
+        },
+      } as SDKMessage)
     expect(text).toBe('hello')
   })
 })

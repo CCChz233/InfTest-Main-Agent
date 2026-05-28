@@ -26,6 +26,142 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def should_use_file_api_mode(agent_cwd: Path, script: str) -> bool:
+    mode = os.environ.get("INFTEST_EXECUTION_AGENT_MODE", "").strip().lower()
+    if mode in {"file_api", "run_api_file", "run-testcase-file"}:
+        return True
+    if mode in {"execute", "legacy_execute"}:
+        return False
+    script_path = agent_cwd / script
+    if not script_path.exists():
+        return False
+    try:
+        script_text = script_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False
+    return "run-testcase-file" in script_text and "--case" in script_text
+
+
+def should_use_mock_mode() -> bool:
+    mode = os.environ.get("INFTEST_EXECUTION_AGENT_MODE", "").strip().lower()
+    if mode in {"mock", "mock_data", "mock_result"}:
+        return True
+    return os.environ.get("INFTEST_EXECUTION_MOCK", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def iter_device_bound_cases(device_case_bind: Path) -> list[dict[str, Any]]:
+    data = read_json(device_case_bind)
+    device_case = data.get("device_case", {}) if isinstance(data, dict) else {}
+    cases: list[dict[str, Any]] = []
+    if isinstance(device_case, dict):
+        for index, case in enumerate(device_case.values(), 1):
+            if not isinstance(case, dict):
+                continue
+            case_id = str(case.get("case_id") or f"case_{index:03d}")
+            cases.append(
+                {
+                    "case_id": case_id,
+                    "case_name": str(case.get("case_name") or case.get("test_scenario") or case_id),
+                    "case_function_point": str(case.get("case_function_point") or "未分类功能点"),
+                    "test_scenario": str(case.get("test_scenario") or "默认场景"),
+                    "case_step": case.get("case_step", []),
+                    "expected_result": case.get("expected_result", []),
+                }
+            )
+    return cases
+
+
+def build_case_file_from_device_bind(device_case_bind: Path, case_file: Path) -> Path:
+    cases = iter_device_bound_cases(device_case_bind)
+    lines: list[str] = []
+    for case_index, case in enumerate(cases, 1):
+        steps = case.get("case_step", [])
+        expected = case.get("expected_result", [])
+        if isinstance(steps, list):
+            step_text = "，".join(str(step) for step in steps)
+        else:
+            step_text = str(steps)
+        if isinstance(expected, list):
+            expected_text = "，".join(str(item) for item in expected)
+        else:
+            expected_text = str(expected)
+        lines.append(f"案例{case_index}操作步骤：{step_text}")
+        lines.append(f"案例{case_index}预期结果：{expected_text}")
+    if not lines:
+        raise ValueError(f"No executable cases found in {device_case_bind}")
+    write_text(case_file, "\n".join(lines) + "\n")
+    return case_file
+
+
+def normalize_lines(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if value is None:
+        return []
+    return [str(value)]
+
+
+def build_mock_case_result(task_id: str, device_case_bind: Path) -> dict[str, Any]:
+    cases = iter_device_bound_cases(device_case_bind)
+    if not cases:
+        raise ValueError(f"No executable cases found in {device_case_bind}")
+
+    rows: list[dict[str, Any]] = []
+    for index, case in enumerate(cases, 1):
+        steps = normalize_lines(case.get("case_step"))
+        expected = normalize_lines(case.get("expected_result"))
+        expected_text = "；".join(expected) if expected else "预期结果通过"
+        rows.append(
+            {
+                "task_id": task_id,
+                "case_index": index,
+                "case_id": case["case_id"],
+                "case_name": case["case_name"],
+                "test_type": "functional",
+                "case_step": "\n".join(steps),
+                "expected_result": expected,
+                "status": "pass",
+                "steps_info": [
+                    {
+                        "step": step_index,
+                        "logs": f"mock execution step passed: {step}",
+                        "snapshot": "",
+                        "status": "passed",
+                    }
+                    for step_index, step in enumerate(steps, 1)
+                ],
+                "functional": {
+                    "status": "passed",
+                    "test_type": "functional",
+                    "scene": case["test_scenario"],
+                    "expected_result": expected_text,
+                    "actual_result": "Mock execution completed successfully.",
+                    "failure_attribution": "",
+                    "failure_attribution_rationale": "",
+                    "failure_attribution_confidence": "",
+                    "issue_root_type": "",
+                    "issue_root_type_label": "",
+                    "functional_problem_summary": "",
+                    "failure_symptom_type": "",
+                },
+                "screenshots_analysis": [],
+                "issues_found": [],
+                "risk_level": "low",
+            }
+        )
+    return {"cases": rows}
+
+
 def find_case_result(workspace: Path, agent_cwd: Path) -> Path | None:
     explicit = os.environ.get("INFTEST_EXECUTION_CASE_RESULT", "").strip()
     candidates = []
@@ -45,6 +181,43 @@ def find_case_result(workspace: Path, agent_cwd: Path) -> Path | None:
     return None
 
 
+def extract_run_api_response(stdout: str) -> tuple[int | None, dict[str, Any] | None]:
+    status_code: int | None = None
+    response_body: dict[str, Any] | None = None
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith("状态码："):
+            try:
+                status_code = int(line.split("：", 1)[1].strip())
+            except ValueError:
+                status_code = None
+            continue
+        if line.startswith("返回结果："):
+            raw_json = line.split("：", 1)[1].strip()
+            try:
+                parsed = json.loads(raw_json)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                response_body = parsed
+    return status_code, response_body
+
+
+def run_api_failure_message(stdout: str) -> str | None:
+    status_code, response_body = extract_run_api_response(stdout)
+    if response_body and response_body.get("success") is False:
+        error = response_body.get("error") or response_body.get("message")
+        if error:
+            prefix = f"Execution API returned HTTP {status_code}: " if status_code else ""
+            return f"{prefix}{error}"
+        if status_code and status_code >= 400:
+            return f"Execution API returned HTTP {status_code} with success=false."
+        return "Execution API returned success=false."
+    if status_code and status_code >= 400:
+        return f"Execution API returned HTTP {status_code}."
+    return None
+
+
 def normalize_status(status: Any) -> str:
     value = str(status).strip().lower()
     if value in {"pass", "passed", "success", "successful"}:
@@ -56,7 +229,12 @@ def normalize_status(status: Any) -> str:
 
 def write_summary(task_id: str, case_result_path: Path, summary_path: Path) -> None:
     data = read_json(case_result_path)
-    cases = data.get("cases", []) if isinstance(data, dict) else []
+    if isinstance(data, dict):
+        cases = data.get("cases", [])
+    elif isinstance(data, list):
+        cases = data
+    else:
+        cases = []
     passed = 0
     failed = 0
     skipped = 0
@@ -88,7 +266,7 @@ def write_summary(task_id: str, case_result_path: Path, summary_path: Path) -> N
     )
 
 
-def build_command(args: argparse.Namespace, device_case_bind: Path) -> list[str]:
+def build_command(args: argparse.Namespace, device_case_bind: Path, workspace: Path, agent_cwd: Path) -> list[str]:
     explicit = os.environ.get("INFTEST_EXECUTION_AGENT_COMMAND", "").strip()
     if explicit:
         return shlex.split(explicit) + [
@@ -100,6 +278,20 @@ def build_command(args: argparse.Namespace, device_case_bind: Path) -> list[str]
 
     python_bin = os.environ.get("INFTEST_EXECUTION_AGENT_PYTHON", "python")
     script = os.environ.get("INFTEST_EXECUTION_AGENT_SCRIPT", "run_API.py")
+    if should_use_file_api_mode(agent_cwd, script):
+        case_file = build_case_file_from_device_bind(
+            device_case_bind,
+            workspace / "execution" / "inputs" / "test_cases.md",
+        )
+        return [
+            python_bin,
+            script,
+            "--case",
+            str(case_file),
+            "--json",
+            str(workspace / "execution" / "results" / "case_result.json"),
+        ]
+
     user_id = os.environ.get("INFTEST_EXECUTION_USER_ID", "u001")
     project_id = os.environ.get("INFTEST_PROJECT_ID", "xh")
     model = os.environ.get("INFTEST_EXECUTION_MODEL", "glm-4.7")
@@ -158,6 +350,67 @@ def main() -> int:
         )
         return 1
 
+    if should_use_mock_mode():
+        invocation_path = logs_dir / "real_execution_agent_invocation.json"
+        stdout_path = logs_dir / "real_execution_agent.stdout.log"
+        stderr_path = logs_dir / "real_execution_agent.stderr.log"
+        case_result_path = results_dir / "case_result.json"
+        summary_path = results_dir / "summary.json"
+        try:
+            write_json(case_result_path, build_mock_case_result(args.task_id, device_case_bind))
+            write_summary(args.task_id, case_result_path, summary_path)
+        except Exception as error:
+            write_json(
+                output_json,
+                {
+                    "success": False,
+                    "agent_name": "test_executor",
+                    "status": "FAILED",
+                    "task_id": args.task_id,
+                    "artifacts": {},
+                    "metrics": {"duration_ms": int((time.time() - started) * 1000)},
+                    "error": {
+                        "code": "MOCK_EXECUTION_FAILED",
+                        "message": str(error),
+                    },
+                },
+            )
+            return 1
+
+        write_json(
+            invocation_path,
+            {
+                "mode": "mock",
+                "cwd": None,
+                "argv": [],
+                "device_case_bind": str(device_case_bind),
+            },
+        )
+        stdout_path.write_text(
+            f"mock execution generated {case_result_path}\n",
+            encoding="utf-8",
+        )
+        stderr_path.write_text("", encoding="utf-8")
+        write_json(
+            output_json,
+            {
+                "success": True,
+                "agent_name": "test_executor",
+                "status": "SUCCESS",
+                "task_id": args.task_id,
+                "artifacts": {
+                    "case_result": str(case_result_path),
+                    "execution_summary": str(summary_path),
+                    "stdout_log": str(stdout_path),
+                    "stderr_log": str(stderr_path),
+                    "invocation": str(invocation_path),
+                },
+                "metrics": {"duration_ms": int((time.time() - started) * 1000)},
+                "error": None,
+            },
+        )
+        return 0
+
     agent_cwd_value = os.environ.get("INFTEST_EXECUTION_AGENT_CWD", "").strip()
     if not agent_cwd_value:
         write_json(
@@ -196,7 +449,7 @@ def main() -> int:
         )
         return 1
 
-    cmd = build_command(args, device_case_bind)
+    cmd = build_command(args, device_case_bind, workspace, agent_cwd)
     invocation_path = logs_dir / "real_execution_agent_invocation.json"
     write_json(invocation_path, {"cwd": str(agent_cwd), "argv": cmd})
 
@@ -212,6 +465,29 @@ def main() -> int:
     stderr_path = logs_dir / "real_execution_agent.stderr.log"
     stdout_path.write_text(proc.stdout, encoding="utf-8")
     stderr_path.write_text(proc.stderr, encoding="utf-8")
+
+    run_api_error = run_api_failure_message(proc.stdout)
+    if run_api_error is not None:
+        write_json(
+            output_json,
+            {
+                "success": False,
+                "agent_name": "test_executor",
+                "status": "FAILED",
+                "task_id": args.task_id,
+                "artifacts": {
+                    "stdout_log": str(stdout_path),
+                    "stderr_log": str(stderr_path),
+                    "invocation": str(invocation_path),
+                },
+                "metrics": {"duration_ms": int((time.time() - started) * 1000)},
+                "error": {
+                    "code": "EXECUTION_AGENT_API_FAILED",
+                    "message": run_api_error,
+                },
+            },
+        )
+        return 1
 
     case_result_source = find_case_result(workspace, agent_cwd)
     if proc.returncode != 0:

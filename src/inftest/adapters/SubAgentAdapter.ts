@@ -7,10 +7,7 @@ import {
   type SubAgentOutputJson,
 } from '../schemas/subagentOutput.js'
 
-const REPO_ROOT = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../..',
-)
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
 export const SUBAGENT_NAMES = [
   'test_generation',
@@ -28,6 +25,7 @@ export type InvokeSubAgentInput = {
   output_json: string
   timeout_seconds?: number
   extra_args?: Record<string, string | number | boolean>
+  adapter_script?: string
 }
 
 export type InvokeSubAgentOutput = {
@@ -77,9 +75,10 @@ export function terminateRunningSubAgents(
   return terminated
 }
 
-function buildSpawnArgv(
-  input: InvokeSubAgentInput,
-): { argv: string[]; cwd: string } {
+function buildSpawnArgv(input: InvokeSubAgentInput): {
+  argv: string[]
+  cwd: string
+} {
   const cfg = getInfTestConfig()
   const override = cfg?.subagents?.[input.agent_name]
   const defaultScript = resolve(REPO_ROOT, AGENT_SCRIPTS[input.agent_name])
@@ -94,6 +93,14 @@ function buildSpawnArgv(
     input.output_json,
     ...extraArgsToArgv(input.extra_args),
   ]
+
+  if (input.adapter_script) {
+    const script = resolve(REPO_ROOT, input.adapter_script)
+    return {
+      argv: [pythonBin, script, ...baseArgs],
+      cwd: REPO_ROOT,
+    }
+  }
 
   if (override?.command) {
     const prefix = override.args ?? []
@@ -163,7 +170,10 @@ function readValidatedOutput(
     return { output: parsed.value, parseError: null }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return { output: undefined, parseError: `Failed to read output-json: ${message}` }
+    return {
+      output: undefined,
+      parseError: `Failed to read output-json: ${message}`,
+    }
   }
 }
 
@@ -216,7 +226,9 @@ export class SubAgentAdapter {
       )
 
       const exitOk = resolvedExit === 0
-      const outputOk = output ? output.success && output.status !== 'FAILED' : false
+      const outputOk = output
+        ? output.success && output.status !== 'FAILED'
+        : false
       const success = exitOk && !timedOut && parseError === null && outputOk
 
       let error: string | null = null
@@ -224,6 +236,8 @@ export class SubAgentAdapter {
         error = `Sub agent timed out after ${input.timeout_seconds} seconds`
       } else if (parseError) {
         error = parseError
+      } else if (output?.error?.message) {
+        error = output.error.message
       } else if (!exitOk) {
         error =
           resolvedExit === 124

@@ -29,13 +29,11 @@ export const InfTestProxyConfigSchema = z.strictObject({
 export const InfTestConfigSchema = z.strictObject({
   provider: InfTestProviderSchema.optional(),
   orchestration: InfTestOrchestrationSchema.optional(),
-  runner: z.enum(['fake', 'query']).optional(),
+  runner: z.enum(['fake', 'query', 'available', 'stateful']).optional(),
   model: InfTestModelConfigSchema.optional(),
   server: InfTestServerConfigSchema.optional(),
   proxy: InfTestProxyConfigSchema.optional(),
-  subagents: z
-    .record(z.string(), InfTestSubAgentLaunchSchema)
-    .optional(),
+  subagents: z.record(z.string(), InfTestSubAgentLaunchSchema).optional(),
   workspace_root: z.string().min(1).optional(),
   python_bin: z.string().min(1).optional(),
 })

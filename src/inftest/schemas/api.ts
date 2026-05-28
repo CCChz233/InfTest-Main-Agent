@@ -22,6 +22,11 @@ export type TerminateTaskRequest = z.infer<typeof TerminateTaskRequestSchema>
 export const TaskDetailSchema = z.strictObject({
   task_id: z.string(),
   task_status: z.string(),
+  current_stage: z.string().nullable(),
+  previous_stage: z.string().nullable(),
+  active_skill: z.string().nullable(),
+  blocking_reason: z.string().nullable(),
+  stage_history: z.array(z.record(z.string(), z.unknown())),
   workspace: z.string(),
   runner: z.string(),
   started_at: z.string(),
@@ -66,13 +71,13 @@ export const InfTestStepRecordSchema = z.strictObject({
 export const StartTaskDataSchema = z.strictObject({
   task_id: z.string(),
   task_status: z.string(),
+  current_stage: z.string().nullable().optional(),
   workspace: z.string(),
   runner: z.string(),
   artifacts: z.record(z.string(), z.string()),
   run_fake_e2e_invoked: z.boolean(),
-  orchestration: z.enum(['aggregate', 'stepwise']).optional(),
+  orchestration: z.enum(['aggregate', 'stepwise', 'stateful']).optional(),
   steps: z.array(InfTestStepRecordSchema).optional(),
 })
 
 export type StartTaskData = z.infer<typeof StartTaskDataSchema>
-

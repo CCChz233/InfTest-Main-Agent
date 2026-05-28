@@ -34,6 +34,11 @@ export function sessionToTaskDetail(session: TaskSession): TaskDetail {
   return TaskDetailSchema.parse({
     task_id: session.task_id,
     task_status: session.status,
+    current_stage: session.current_stage,
+    previous_stage: session.previous_stage,
+    active_skill: session.active_skill,
+    blocking_reason: session.blocking_reason,
+    stage_history: session.stage_history,
     workspace: session.workspace,
     runner: session.runner,
     started_at: session.started_at,

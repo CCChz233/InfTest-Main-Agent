@@ -14,6 +14,7 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true })
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.INFTEST_RUNNER
+  delete process.env.INFTEST_STATEFUL_RUNNER
   delete process.env.INFTEST_ORCHESTRATION
   delete process.env.INFTEST_CONFIG
   delete process.env.CLAUDE_CODE_USE_OPENAI
@@ -57,6 +58,13 @@ describe('loadInfTestConfig', () => {
     })
     expect(process.env.ANTHROPIC_API_KEY).toBe('env-wins')
     expect(process.env.INFTEST_RUNNER).toBe('query')
+  })
+
+  test('accepts stateful runner config', () => {
+    applyInfTestConfigToEnv({
+      runner: 'stateful',
+    })
+    expect(process.env.INFTEST_RUNNER).toBe('stateful')
   })
 
   test('infers openai provider and normalizes chat/completions base URL', () => {

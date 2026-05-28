@@ -51,7 +51,9 @@ export function buildInfTestStartPrompt(args: {
     lines.push(`Task detail: ${JSON.stringify(args.task)}`)
   }
   if (args.workspace) {
-    lines.push(`Workspace: ${args.workspace}`)
+    lines.push(
+      `Expected workspace: ${args.workspace}. When calling init_workspace, pass only task_id and omit workspace_root unless the user explicitly provides a workspace root.`,
+    )
   }
   return lines.join('\n')
 }

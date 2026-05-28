@@ -67,13 +67,6 @@ describe('handleInfTestTaskApiRequest', () => {
   test('POST /tasks/alter PAUSE/CONTINUE and POST /tasks/terminate', async () => {
     const manager = getInfTestTaskSessionManagerForTests()
     manager.start('task-demo-001', 'fake')
-    manager.finish('task-demo-001', {
-      status: 'SUCCESS',
-      workspace: '/tmp/task-demo-001',
-      artifacts: { plan: '/tmp/task-demo-001/plan.json' },
-      last_error: null,
-      run_fake_e2e_invoked: false,
-    })
 
     const pauseResponse = await handleInfTestTaskApiRequest(
       postAlter({ task_id: 'task-demo-001', task_operation: 'PAUSE' }),
@@ -95,14 +88,20 @@ describe('handleInfTestTaskApiRequest', () => {
       postAlter({ task_id: 'task-demo-001', task_operation: 'CONTINUE' }),
     )
     expect(continueResponse.status).toBe(200)
-    const continueBody = (await continueResponse.json()) as Record<string, unknown>
+    const continueBody = (await continueResponse.json()) as Record<
+      string,
+      unknown
+    >
     expect(continueBody.message).toBe('Task continued')
 
     const terminateResponse = await handleInfTestTaskApiRequest(
       postTerminate({ task_id: 'task-demo-001' }),
     )
     expect(terminateResponse.status).toBe(200)
-    const terminateBody = (await terminateResponse.json()) as Record<string, unknown>
+    const terminateBody = (await terminateResponse.json()) as Record<
+      string,
+      unknown
+    >
     expect(terminateBody.code).toBe(0)
     expect(terminateBody.message).toBe('Task terminated')
 

@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "agent_name": "result_analyzer",
+  "status": "SUCCESS",
+  "task_id": "task-postman-direct-001",
+  "artifacts": {
+    "analysis_report": "/Users/chz/workspace/inftest-runtime/InfTest-Main-Agent/.inftest-workspace/task-postman-direct-001/analysis/report.md",
+    "analysis_report_json": "/Users/chz/workspace/inftest-runtime/InfTest-Main-Agent/.inftest-workspace/task-postman-direct-001/analysis/report.json"
+  },
+  "metrics": {
+    "duration_ms": 0
+  },
+  "error": null
+}

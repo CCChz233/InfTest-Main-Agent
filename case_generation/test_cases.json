@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "agent_name": "test_generation",
+  "status": "SUCCESS",
+  "task_id": "task-postman-direct-001",
+  "artifacts": {
+    "test_cases": "/Users/chz/workspace/inftest-runtime/InfTest-Main-Agent/.inftest-workspace/task-postman-direct-001/case_generation/test_cases.json",
+    "result": "case_generation/test_cases.json"
+  },
+  "metrics": {
+    "duration_ms": 0,
+    "total_tokens": 0
+  },
+  "error": null
+}

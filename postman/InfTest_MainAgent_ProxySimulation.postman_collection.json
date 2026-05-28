@@ -1,0 +1,351 @@
+{
+  "info": {
+    "name": "InfTest Main Agent - Direct Agent Service Simulation",
+    "description": "Postman collection where Postman directly simulates Agent Service calling InfTest Main Agent. The mock Agent Service only provides task detail and receives task updates.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "main_agent_base_url",
+      "value": "http://127.0.0.1:8787"
+    },
+    {
+      "key": "proxy_base_url",
+      "value": "http://127.0.0.1:8790"
+    },
+    {
+      "key": "task_id",
+      "value": "task-postman-direct-001"
+    },
+    {
+      "key": "stateful_main_agent_base_url",
+      "value": "http://127.0.0.1:8793"
+    },
+    {
+      "key": "stateful_task_id",
+      "value": "task-postman-stateful-001"
+    }
+  ],
+  "item": [
+    {
+      "name": "TC-00A Main Agent health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(0);",
+              "pm.expect(body.data.status).to.eql('ok');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{main_agent_base_url}}/health",
+          "host": [
+            "{{main_agent_base_url}}"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-00B Mock Agent Service health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(0);",
+              "pm.expect(body.data.status).to.eql('ok');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{proxy_base_url}}/health",
+          "host": [
+            "{{proxy_base_url}}"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-01 START Main Agent directly",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(0);",
+              "pm.expect(body.data.task_status).to.eql('SUCCESS');",
+              "pm.expect(body.data.runner).to.eql('query');",
+              "pm.expect(body.data.orchestration).to.eql('stepwise');",
+              "pm.expect(body.data.run_fake_e2e_invoked).to.eql(false);",
+              "pm.expect(body.data.artifacts.plan).to.be.a('string');",
+              "pm.expect(body.data.artifacts.test_cases).to.be.a('string');",
+              "pm.expect(body.data.artifacts.execution_summary).to.be.a('string');",
+              "pm.expect(body.data.artifacts.analysis_report).to.be.a('string');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"task_id\": \"{{task_id}}\",\n  \"task_operation\": \"START\"\n}"
+        },
+        "url": {
+          "raw": "{{main_agent_base_url}}/tasks/alter",
+          "host": [
+            "{{main_agent_base_url}}"
+          ],
+          "path": [
+            "tasks",
+            "alter"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-02 Main Agent task detail",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(0);",
+              "const detail = body.data.task_detail;",
+              "pm.expect(detail.task_status).to.eql('SUCCESS');",
+              "pm.expect(detail.runner).to.eql('query');",
+              "pm.expect(detail.artifacts.plan).to.be.a('string');",
+              "pm.expect(detail.artifacts.execution_summary).to.be.a('string');",
+              "pm.expect(detail.artifacts.analysis_report).to.be.a('string');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{main_agent_base_url}}/tasks/{{task_id}}",
+          "host": [
+            "{{main_agent_base_url}}"
+          ],
+          "path": [
+            "tasks",
+            "{{task_id}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-03 Mock Agent Service callback record",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(0);",
+              "pm.expect(body.data.task_id).to.eql(pm.collectionVariables.get('task_id') || pm.environment.get('task_id'));",
+              "pm.expect(body.data.updates.length).to.be.above(0);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{proxy_base_url}}/api/mock/tasks/{{task_id}}",
+          "host": [
+            "{{proxy_base_url}}"
+          ],
+          "path": [
+            "api",
+            "mock",
+            "tasks",
+            "{{task_id}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-04 Main Agent chat stream smoke",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"u001\",\n  \"task_id\": \"{{task_id}}\",\n  \"user_instruction\": \"请总结当前任务执行状态和报告路径\"\n}"
+        },
+        "url": {
+          "raw": "{{main_agent_base_url}}/tasks/chat/stream",
+          "host": [
+            "{{main_agent_base_url}}"
+          ],
+          "path": [
+            "tasks",
+            "chat",
+            "stream"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-05 TERMINATE Main Agent smoke",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(0);",
+              "pm.expect(body.message).to.eql('Task terminated');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"task_id\": \"{{task_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{main_agent_base_url}}/tasks/terminate",
+          "host": [
+            "{{main_agent_base_url}}"
+          ],
+          "path": [
+            "tasks",
+            "terminate"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-06 START Stateful Main Agent with device mock",
+      "description": "Run with INFTEST_RUNNER=stateful, gui-tester API_PORT=5002 and INFTEST_MOCK_DEVICE=1. Expected before real model is configured: execution succeeds, report-agent fails with model Connection error.",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(500);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(500);",
+              "pm.expect(body.message).to.include('Connection error');",
+              "pm.expect(body.message).to.include('模型调用失败');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"task_id\": \"{{stateful_task_id}}\",\n  \"task_operation\": \"START\"\n}"
+        },
+        "url": {
+          "raw": "{{stateful_main_agent_base_url}}/tasks/alter",
+          "host": [
+            "{{stateful_main_agent_base_url}}"
+          ],
+          "path": [
+            "tasks",
+            "alter"
+          ]
+        }
+      }
+    },
+    {
+      "name": "TC-07 Stateful task detail after expected report failure",
+      "description": "Confirms stateful runner reached REFLECTING and failed in report-agent model call, not state machine / skill / hook wiring.",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const body = pm.response.json();",
+              "pm.expect(body.code).to.eql(0);",
+              "const detail = body.data.task_detail;",
+              "pm.expect(detail.runner).to.eql('stateful');",
+              "pm.expect(detail.task_status).to.eql('FAILED');",
+              "pm.expect(detail.current_stage).to.eql('REFLECTING');",
+              "pm.expect(detail.last_error).to.include('Connection error');",
+              "pm.expect(detail.artifacts.execution_summary).to.be.a('string');",
+              "pm.expect(detail.artifacts.report_agent_log).to.be.a('string');",
+              "pm.expect(detail.artifacts.analysis_result).to.be.a('string');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{stateful_main_agent_base_url}}/tasks/{{stateful_task_id}}",
+          "host": [
+            "{{stateful_main_agent_base_url}}"
+          ],
+          "path": [
+            "tasks",
+            "{{stateful_task_id}}"
+          ]
+        }
+      }
+    }
+  ]
+}
