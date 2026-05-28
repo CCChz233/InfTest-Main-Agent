@@ -4,6 +4,7 @@ import type { TaskUpdate } from '../schemas/update.js'
 export type ReportTaskUpdateResult = {
   accepted: true
   event_id: string
+  exec_id: string
   task_id: string
 }
 
@@ -19,7 +20,8 @@ function getProxyBaseUrl(): string {
 
 function getTaskReportPath(): string {
   return (
-    process.env.INFTEST_PROXY_TASK_REPORT_PATH?.trim() ?? 'api/inftest/task_report'
+    process.env.INFTEST_PROXY_TASK_REPORT_PATH?.trim() ??
+    'api/inftest/task_report'
   )
 }
 
@@ -32,17 +34,31 @@ export class ProxyClient {
         const response = await fetch(url, { method: 'GET' })
         if (response.ok) {
           const body = (await response.json()) as {
-            data?: { task_detail?: InfTestTaskDetail }
-            task_detail?: InfTestTaskDetail
+            data?: { task_detail?: Record<string, unknown> }
+            task_detail?: Record<string, unknown>
           }
           const detail = body.data?.task_detail ?? body.task_detail
-          if (detail) return detail
+          const execId =
+            typeof detail?.exec_id === 'string'
+              ? detail.exec_id
+              : typeof detail?.task_id === 'string'
+                ? detail.task_id
+                : taskId
+          if (detail) {
+            return {
+              ...detail,
+              exec_id: execId,
+              task_id:
+                typeof detail.task_id === 'string' ? detail.task_id : execId,
+            } as InfTestTaskDetail
+          }
         }
       } catch {
         /* fall through to stub */
       }
     }
     return {
+      exec_id: taskId,
       task_id: taskId,
       task_target: '测试登录功能',
       task_config: {
@@ -54,23 +70,26 @@ export class ProxyClient {
     }
   }
 
-  async reportTaskUpdate(
-    update: TaskUpdate,
-  ): Promise<ReportTaskUpdateResult> {
+  async reportTaskUpdate(update: TaskUpdate): Promise<ReportTaskUpdateResult> {
     const base = getProxyBaseUrl()
     if (!base) {
       return {
         accepted: true,
         event_id: update.event_id,
+        exec_id: update.exec_id ?? update.task_id,
         task_id: update.task_id,
       }
     }
 
     const url = joinUrl(base, getTaskReportPath())
+    const payload = {
+      ...update,
+      exec_id: update.exec_id ?? update.task_id,
+    }
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify(update),
+      body: JSON.stringify(payload),
     })
 
     if (!response.ok) {
@@ -83,6 +102,7 @@ export class ProxyClient {
     return {
       accepted: true,
       event_id: update.event_id,
+      exec_id: update.exec_id ?? update.task_id,
       task_id: update.task_id,
     }
   }

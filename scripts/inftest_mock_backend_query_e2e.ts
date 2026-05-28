@@ -51,7 +51,7 @@ try {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      task_id: taskId,
+      exec_id: taskId,
       task_operation: 'START',
       task_target:
         '用户通过 mock 后端端口启动任务：请按 InfTest 主 Agent 工具链生成计划、调用子 Agent、上报状态并产出报告。',
@@ -80,6 +80,7 @@ try {
       {
         ok: true,
         mode: 'mock-backend + query + stepwise',
+        exec_id: taskId,
         task_id: taskId,
         task_status: task.task_status,
         agent_port: agentPort,

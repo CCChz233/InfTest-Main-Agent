@@ -38,13 +38,15 @@ const CasePublishRequestSchema = z
 
 const TaskReportGenerateRequestSchema = z
   .object({
-    task_id: NonEmptyStringSchema,
+    exec_id: NonEmptyStringSchema.optional(),
+    task_id: NonEmptyStringSchema.optional(),
   })
   .passthrough()
 
 const TaskManageRequestSchema = z
   .object({
-    task_id: NonEmptyStringSchema,
+    exec_id: NonEmptyStringSchema.optional(),
+    task_id: NonEmptyStringSchema.optional(),
     task_operation: z.enum([
       'START',
       'PAUSE',
@@ -106,6 +108,10 @@ function stringField(
 ): string | null {
   const value = body[field]
   return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+function execIdField(body: Record<string, unknown>): string | null {
+  return stringField(body, 'exec_id') ?? stringField(body, 'task_id')
 }
 
 function arrayFieldExists(
@@ -184,6 +190,22 @@ function validatePlannerApiStubBody(
 
   const bodyRecord = recordFromBody(body)
   if (
+    (endpoint === '/api/task-report-generate' ||
+      endpoint === '/api/task-manage') &&
+    !execIdField(bodyRecord)
+  ) {
+    return {
+      success: false,
+      issues: [
+        {
+          path: ['exec_id'],
+          message: `${endpoint} requires exec_id`,
+        },
+      ],
+    }
+  }
+
+  if (
     endpoint === '/api/case-publish' &&
     !arrayFieldExists(bodyRecord, 'cases') &&
     !arrayFieldExists(bodyRecord, 'task_list') &&
@@ -225,14 +247,14 @@ function validatePlannerApiStubBody(
   if (
     endpoint === '/api/user-instruction' &&
     !stringField(bodyRecord, 'plan_id') &&
-    !stringField(bodyRecord, 'task_id')
+    !execIdField(bodyRecord)
   ) {
     return {
       success: false,
       issues: [
         {
           path: ['plan_id'],
-          message: 'user-instruction requires plan_id or task_id',
+          message: 'user-instruction requires plan_id or exec_id',
         },
       ],
     }
@@ -287,20 +309,23 @@ function buildPlannerApiStubData(
       return {
         ...base,
         plan_id: stringField(bodyRecord, 'plan_id'),
-        task_id: stringField(bodyRecord, 'task_id'),
+        exec_id: execIdField(bodyRecord),
+        task_id: execIdField(bodyRecord),
         case_status: 'STUB_ACCEPTED',
       }
     case '/api/task-report-generate':
       return {
         ...base,
-        task_id: stringField(bodyRecord, 'task_id'),
+        exec_id: execIdField(bodyRecord),
+        task_id: execIdField(bodyRecord),
         task_status: 'PENDING',
         report_status: 'PENDING',
       }
     case '/api/task-manage':
       return {
         ...base,
-        task_id: stringField(bodyRecord, 'task_id'),
+        exec_id: execIdField(bodyRecord),
+        task_id: execIdField(bodyRecord),
         task_operation: stringField(bodyRecord, 'task_operation'),
         task_status: statusForTaskOperation(bodyRecord.task_operation),
       }
@@ -308,7 +333,8 @@ function buildPlannerApiStubData(
       return {
         ...base,
         plan_id: stringField(bodyRecord, 'plan_id'),
-        task_id: stringField(bodyRecord, 'task_id'),
+        exec_id: execIdField(bodyRecord),
+        task_id: execIdField(bodyRecord),
         message_id: requestId,
         finished: true,
         content: 'Planner API stub accepted the user instruction.',

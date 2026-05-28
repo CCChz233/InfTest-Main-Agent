@@ -15,6 +15,7 @@ const outputSchema = lazySchema(() =>
   z.strictObject({
     accepted: z.literal(true),
     event_id: z.string(),
+    exec_id: z.string(),
     task_id: z.string(),
   }),
 )

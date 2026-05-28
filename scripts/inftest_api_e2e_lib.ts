@@ -107,7 +107,7 @@ export async function runInfTestApiE2E(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        task_id: taskId,
+        exec_id: taskId,
         task_operation: 'START',
       }),
     })

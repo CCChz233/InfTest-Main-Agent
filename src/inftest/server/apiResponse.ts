@@ -32,6 +32,7 @@ export function apiError(
 
 export function sessionToTaskDetail(session: TaskSession): TaskDetail {
   return TaskDetailSchema.parse({
+    exec_id: session.task_id,
     task_id: session.task_id,
     task_status: session.status,
     current_stage: session.current_stage,

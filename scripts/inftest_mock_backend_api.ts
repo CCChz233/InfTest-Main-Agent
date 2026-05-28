@@ -13,6 +13,7 @@ type TaskStatus =
   | 'TERMINATED'
 
 type TaskRecord = {
+  exec_id: string
   task_id: string
   task_name: string
   task_status: TaskStatus
@@ -82,6 +83,7 @@ function ensureTask(taskId: string, patch: Partial<TaskRecord> = {}): TaskRecord
   }
   const timestamp = now()
   const task: TaskRecord = {
+    exec_id: taskId,
     task_id: taskId,
     task_name: `Mock InfTest Task ${taskId}`,
     task_status: 'PENDING',
@@ -118,6 +120,7 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
 function taskDetailPayload(task: TaskRecord): Record<string, unknown> {
   return {
     id: 1,
+    exec_id: task.task_id,
     task_id: task.task_id,
     task_name: task.task_name,
     task_status: task.task_status,
@@ -142,6 +145,7 @@ function taskDetailPayload(task: TaskRecord): Record<string, unknown> {
 
 function proxyTaskDetailPayload(task: TaskRecord): Record<string, unknown> {
   return {
+    exec_id: task.task_id,
     task_id: task.task_id,
     task_target: task.task_target,
     task_config: task.task_config,
@@ -199,9 +203,9 @@ function updateTaskFromAgentResponse(task: TaskRecord, body: unknown): void {
 
 async function handleAlter(request: Request): Promise<Response> {
   const body = await readJson(request)
-  const taskId = String(body.task_id ?? '').trim()
+  const taskId = String(body.exec_id ?? body.task_id ?? '').trim()
   const operation = String(body.task_operation ?? '').trim().toUpperCase()
-  if (!taskId) return error('task_id is required')
+  if (!taskId) return error('exec_id is required')
   if (!operation) return error('task_operation is required')
 
   const patch: Partial<TaskRecord> = {}
@@ -218,7 +222,7 @@ async function handleAlter(request: Request): Promise<Response> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        task_id: taskId,
+        exec_id: taskId,
         task_operation: 'START',
       }),
     })
@@ -227,6 +231,7 @@ async function handleAlter(request: Request): Promise<Response> {
       code: 0,
       message: 'success',
       data: {
+        exec_id: taskId,
         task_id: taskId,
         task_status: task.task_status,
         agent_response: agentBody,
@@ -239,7 +244,7 @@ async function handleAlter(request: Request): Promise<Response> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        task_id: taskId,
+        exec_id: taskId,
         task_operation: operation,
       }),
     })
@@ -249,6 +254,7 @@ async function handleAlter(request: Request): Promise<Response> {
       code: 0,
       message: 'success',
       data: {
+        exec_id: taskId,
         task_id: taskId,
         task_status: task.task_status,
         agent_response: agentBody,
@@ -260,7 +266,7 @@ async function handleAlter(request: Request): Promise<Response> {
     const agentBody = await callAgent('/tasks/terminate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ task_id: taskId }),
+      body: JSON.stringify({ exec_id: taskId }),
     })
     task.task_status = 'TERMINATED'
     task.ended_time = now()
@@ -269,6 +275,7 @@ async function handleAlter(request: Request): Promise<Response> {
       code: 0,
       message: 'success',
       data: {
+        exec_id: taskId,
         task_id: taskId,
         task_status: task.task_status,
         agent_response: agentBody,
@@ -281,8 +288,8 @@ async function handleAlter(request: Request): Promise<Response> {
 
 async function handleUpdate(request: Request): Promise<Response> {
   const body = await readJson(request)
-  const taskId = String(body.task_id ?? '').trim()
-  if (!taskId) return error('task_id is required')
+  const taskId = String(body.exec_id ?? body.task_id ?? '').trim()
+  if (!taskId) return error('exec_id is required')
   const task = ensureTask(taskId)
   task.updates.push(body)
   if (typeof body.step_log === 'string') {
@@ -312,6 +319,7 @@ async function handleUpdate(request: Request): Promise<Response> {
     data: {
       accepted: true,
       event_id: typeof body.event_id === 'string' ? body.event_id : '',
+      exec_id: taskId,
       task_id: taskId,
       update_count: task.updates.length,
     },
@@ -335,7 +343,7 @@ async function handleUpload(request: Request): Promise<Response> {
     file_size: fileSize,
     bucket: 'mock-inftest',
   }
-  const taskIdValue = form.get('task_id')
+  const taskIdValue = form.get('exec_id') ?? form.get('task_id')
   if (typeof taskIdValue === 'string' && taskIdValue.trim()) {
     ensureTask(taskIdValue.trim()).uploads.push(uploaded)
   }
@@ -348,6 +356,7 @@ async function handleUpload(request: Request): Promise<Response> {
 
 function getTaskIdFromDetailUrl(url: URL): string {
   return (
+    url.searchParams.get('exec_id') ??
     url.searchParams.get('task_id') ??
     url.searchParams.get('id') ??
     ''
@@ -385,7 +394,7 @@ export async function handleInfTestMockBackendRequest(
 
   if (path === '/api/tasks/detail' && request.method === 'GET') {
     const taskId = getTaskIdFromDetailUrl(url)
-    if (!taskId) return error('task_id is required')
+    if (!taskId) return error('exec_id is required')
     const task = ensureTask(taskId)
     return json({
       code: 0,

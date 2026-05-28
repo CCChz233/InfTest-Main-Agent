@@ -9,11 +9,7 @@ import { ChatStreamRequestSchema } from '../schemas/chat.js'
 import type { ChatStreamChunk } from '../schemas/chat.js'
 import type { ChatStreamSseEnvelope } from '../schemas/api.js'
 import type { TaskSessionManager } from '../TaskSessionManager.js'
-import {
-  API_CODE_SUCCESS,
-  apiError,
-  jsonApiResponse,
-} from './apiResponse.js'
+import { API_CODE_SUCCESS, apiError, jsonApiResponse } from './apiResponse.js'
 
 function formatSseEnvelope(envelope: ChatStreamSseEnvelope): string {
   return `data: ${JSON.stringify(envelope)}\n\n`
@@ -46,18 +42,25 @@ export async function handleChatStream(
   const parsed = ChatStreamRequestSchema.safeParse(body)
   if (!parsed.success) {
     return jsonApiResponse(
-      apiError(400, `Invalid chat stream request: ${JSON.stringify(parsed.error.issues)}`),
+      apiError(
+        400,
+        `Invalid chat stream request: ${JSON.stringify(parsed.error.issues)}`,
+      ),
       400,
     )
   }
 
-  const { task_id, user_instruction, user_id } = parsed.data
-  const session = sessionManager.get(task_id)
+  const { user_instruction, user_id } = parsed.data
+  const execId = parsed.data.exec_id ?? parsed.data.task_id
+  if (!execId) {
+    return jsonApiResponse(apiError(400, 'exec_id is required'), 400)
+  }
+  const session = sessionManager.get(execId)
   if (!session) {
     return jsonApiResponse(
       apiError(
         404,
-        `Task not found: ${task_id}. Call POST /tasks/alter with START first.`,
+        `Exec task not found: ${execId}. Call POST /tasks/alter with START first.`,
       ),
       404,
     )
@@ -93,26 +96,30 @@ export async function handleChatStream(
           userId: user_id,
           messageId,
         })) {
+          const data = {
+            ...chunk,
+            exec_id: chunk.exec_id ?? chunk.task_id,
+          }
           controller.enqueue(
             encoder.encode(
               formatSseEnvelope({
                 code: API_CODE_SUCCESS,
                 message: '',
-                data: chunk,
+                data,
               }),
             ),
           )
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : String(error)
+        const message = error instanceof Error ? error.message : String(error)
         controller.enqueue(
           encoder.encode(
             formatSseEnvelope({
               code: 500,
               message,
               data: {
-                task_id,
+                exec_id: execId,
+                task_id: execId,
                 chunk: message,
                 finished: true,
                 message_id: messageId,

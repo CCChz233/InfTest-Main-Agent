@@ -31,6 +31,7 @@ export const TaskStatusSchema = z.enum([
 export type TaskStatus = z.infer<typeof TaskStatusSchema>
 
 export const InfTestTaskDetailSchema = z.strictObject({
+  exec_id: z.string().min(1).optional(),
   task_id: z.string().min(1),
   task_target: z.string().min(1),
   task_config: z.strictObject({

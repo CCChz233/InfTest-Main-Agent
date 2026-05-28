@@ -1,25 +1,55 @@
 import { z } from 'zod/v4'
 import { ChatStreamChunkSchema } from './chat.js'
-import { InfTestTaskSessionViewSchema } from './session.js'
+
+const ExecIdFieldsSchema = {
+  exec_id: z.string().min(1).optional(),
+  task_id: z.string().min(1).optional(),
+}
+
+function hasExecId(value: { exec_id?: string; task_id?: string }): boolean {
+  return Boolean(value.exec_id ?? value.task_id)
+}
+
+export function resolveExecId(value: {
+  exec_id?: string
+  task_id?: string
+}): string {
+  const execId = value.exec_id ?? value.task_id
+  if (!execId) {
+    throw new Error('exec_id is required')
+  }
+  return execId
+}
 
 /** POST /tasks/alter — 文档 1.2.3.3 */
-export const AlterTaskRequestSchema = z.strictObject({
-  task_operation: z.enum(['START', 'PAUSE', 'CONTINUE']),
-  task_id: z.string().min(1),
-})
+export const AlterTaskRequestSchema = z
+  .strictObject({
+    task_operation: z.enum(['START', 'PAUSE', 'CONTINUE']),
+    ...ExecIdFieldsSchema,
+  })
+  .refine(hasExecId, {
+    message: 'exec_id is required',
+    path: ['exec_id'],
+  })
 
 export type AlterTaskRequest = z.infer<typeof AlterTaskRequestSchema>
 
 /** POST /tasks/terminate — 文档 1.2.3.4 */
-export const TerminateTaskRequestSchema = z.strictObject({
-  task_id: z.string().min(1),
-  project_id: z.string().optional(),
-})
+export const TerminateTaskRequestSchema = z
+  .strictObject({
+    ...ExecIdFieldsSchema,
+    project_id: z.string().optional(),
+  })
+  .refine(hasExecId, {
+    message: 'exec_id is required',
+    path: ['exec_id'],
+  })
 
 export type TerminateTaskRequest = z.infer<typeof TerminateTaskRequestSchema>
 
 /** 任务详情（对齐文档 GetTaskDetail / Planner 会话字段的 MVP 映射） */
 export const TaskDetailSchema = z.strictObject({
+  exec_id: z.string(),
   task_id: z.string(),
   task_status: z.string(),
   current_stage: z.string().nullable(),
@@ -69,6 +99,7 @@ export const InfTestStepRecordSchema = z.strictObject({
 })
 
 export const StartTaskDataSchema = z.strictObject({
+  exec_id: z.string(),
   task_id: z.string(),
   task_status: z.string(),
   current_stage: z.string().nullable().optional(),

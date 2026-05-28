@@ -72,7 +72,7 @@ describe('planner API stub', () => {
         {
           request_id: 'test-planner-stub-case-publish',
           plan_id: 'plan-demo-001',
-          task_id: 'task-demo-001',
+          exec_id: 'exec-demo-001',
           cases: [{ case_id: 'case-demo-001', case_name: '登录成功' }],
         },
       ],
@@ -80,14 +80,14 @@ describe('planner API stub', () => {
         '/api/task-report-generate',
         {
           request_id: 'test-planner-stub-task-report-generate',
-          task_id: 'task-demo-001',
+          exec_id: 'exec-demo-001',
         },
       ],
       [
         '/api/task-manage',
         {
           request_id: 'test-planner-stub-task-manage',
-          task_id: 'task-demo-001',
+          exec_id: 'exec-demo-001',
           task_operation: 'START',
         },
       ],
@@ -131,7 +131,7 @@ describe('planner API stub', () => {
     }
 
     const manager = getInfTestTaskSessionManagerForTests()
-    expect(manager.get('task-demo-001')).toBeUndefined()
+    expect(manager.get('exec-demo-001')).toBeUndefined()
   })
 
   test('returns 400 and logs validation failures', async () => {

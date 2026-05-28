@@ -19,7 +19,7 @@ describe('handleChatStream', () => {
     const response = await handleChatStream(
       chatRequest({
         user_id: 'user-demo',
-        task_id: 'missing-task',
+        exec_id: 'missing-task',
         user_instruction: '总结一下当前任务状态',
       }),
       manager,
@@ -56,7 +56,7 @@ describe('handleChatStream', () => {
     const response = await handleChatStream(
       chatRequest({
         user_id: 'user-demo',
-        task_id: 'task-demo-001',
+        exec_id: 'task-demo-001',
         user_instruction: '总结一下当前任务状态',
       }),
       manager,
@@ -84,6 +84,7 @@ describe('handleChatStream', () => {
     const text = await response.text()
     expect(text).toContain('"code":0')
     expect(text).toContain('"data":{"task_id":"task-demo-001"')
+    expect(text).toContain('"exec_id":"task-demo-001"')
     expect(text).toContain('"chunk":"任务状态：SUCCESS"')
     expect(text).toContain('"finished":true')
     expect(text).toContain('"message_id":"msg-test"')

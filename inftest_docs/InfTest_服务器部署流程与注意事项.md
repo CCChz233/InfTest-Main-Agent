@@ -3,6 +3,7 @@
 > 日期：2026-05-28  
 > 目的：给服务器部署和首次联调使用，按当前主 Agent 状态机版本执行。  
 > 当前推荐入口：`INFTEST_RUNNER=stateful` + `POST /tasks/alter START`。
+> 对外任务标识字段：`exec_id`。
 
 ## 1. 当前部署口径
 
@@ -232,7 +233,7 @@ POST /api/payload
 ```bash
 curl -sS -X POST http://127.0.0.1:8787/tasks/alter \
   -H 'Content-Type: application/json' \
-  -d '{"task_id":"task-server-001","task_operation":"START"}'
+  -d '{"exec_id":"exec-server-001","task_operation":"START"}'
 ```
 
 如果设备和模型都可用，期望最终：
@@ -241,7 +242,7 @@ curl -sS -X POST http://127.0.0.1:8787/tasks/alter \
 {
   "code": 0,
   "data": {
-    "task_id": "task-server-001",
+    "exec_id": "exec-server-001",
     "task_status": "SUCCESS",
     "runner": "stateful"
   }

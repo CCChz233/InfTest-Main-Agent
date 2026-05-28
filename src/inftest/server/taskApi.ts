@@ -8,6 +8,7 @@ import { runInfTestStatefulRunner } from '../StatefulRunner.js'
 import { bootstrapInfTestHeadless } from '../headlessBootstrap.js'
 import {
   AlterTaskRequestSchema,
+  resolveExecId,
   TerminateTaskRequestSchema,
   type StartTaskData,
 } from '../schemas/api.js'
@@ -80,7 +81,7 @@ function taskNotFoundResponse(taskId: string): Response {
   return jsonApiResponse(
     apiError(
       404,
-      `Task not found: ${taskId}. Call POST /tasks/alter with START first.`,
+      `Exec task not found: ${taskId}. Call POST /tasks/alter with START first.`,
     ),
     404,
   )
@@ -103,6 +104,7 @@ function startDataFromSession(
 ): StartTaskData {
   const response = toTaskResponse(session)
   return {
+    exec_id: response.task_id,
     task_id: response.task_id,
     task_status: response.status,
     current_stage: session.current_stage,
@@ -260,14 +262,15 @@ async function handleTasksAlter(request: Request): Promise<Response> {
     )
   }
 
-  const { task_id, task_operation } = parsed.data
+  const { task_operation } = parsed.data
+  const execId = resolveExecId(parsed.data)
 
   if (task_operation === 'START') {
-    return handleTaskStart(task_id, readRunnerMode())
+    return handleTaskStart(execId, readRunnerMode())
   }
 
   try {
-    taskSessionManager.applyControl(task_id, task_operation)
+    taskSessionManager.applyControl(execId, task_operation)
     const messages: Record<'PAUSE' | 'CONTINUE', string> = {
       PAUSE: 'Task paused',
       CONTINUE: 'Task continued',
@@ -293,10 +296,10 @@ async function handleTasksTerminate(request: Request): Promise<Response> {
     )
   }
 
-  const { task_id } = parsed.data
+  const execId = resolveExecId(parsed.data)
 
   try {
-    taskSessionManager.applyControl(task_id, 'TERMINATE')
+    taskSessionManager.applyControl(execId, 'TERMINATE')
     return jsonApiResponse(apiMessage('Task terminated'))
   } catch (error) {
     if (error instanceof TaskSessionNotFoundError) {

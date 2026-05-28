@@ -57,11 +57,41 @@ describe('handleInfTestTaskApiRequest', () => {
       data: { task_detail: Record<string, unknown> }
     }
     expect(body.code).toBe(0)
+    expect(body.data.task_detail.exec_id).toBe('task-demo-001')
     expect(body.data.task_detail.task_id).toBe('task-demo-001')
     expect(body.data.task_detail.runner).toBe('fake')
     expect(body.data.task_detail.task_status).toBe('SUCCESS')
     expect(body.data.task_detail.workspace).toBe('/tmp/task-demo-001')
     expect(body.data.task_detail.message).toBeTypeOf('string')
+  })
+
+  test('POST /tasks/alter and /tasks/terminate accept exec_id', async () => {
+    const manager = getInfTestTaskSessionManagerForTests()
+    manager.start('exec-demo-001', 'fake')
+
+    const pauseResponse = await handleInfTestTaskApiRequest(
+      postAlter({ exec_id: 'exec-demo-001', task_operation: 'PAUSE' }),
+    )
+    expect(pauseResponse.status).toBe(200)
+
+    const getAfterPause = await handleInfTestTaskApiRequest(
+      new Request('http://127.0.0.1/tasks/exec-demo-001'),
+    )
+    const getBody = (await getAfterPause.json()) as {
+      data: { task_detail: { exec_id: string; task_status: string } }
+    }
+    expect(getBody.data.task_detail.exec_id).toBe('exec-demo-001')
+    expect(getBody.data.task_detail.task_status).toBe('PAUSED')
+
+    const terminateResponse = await handleInfTestTaskApiRequest(
+      postTerminate({ exec_id: 'exec-demo-001' }),
+    )
+    expect(terminateResponse.status).toBe(200)
+    const terminateBody = (await terminateResponse.json()) as Record<
+      string,
+      unknown
+    >
+    expect(terminateBody.message).toBe('Task terminated')
   })
 
   test('POST /tasks/alter PAUSE/CONTINUE and POST /tasks/terminate', async () => {

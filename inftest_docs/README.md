@@ -53,6 +53,8 @@ Postman 测试用例文档记录如何用 Postman 模拟智能体代理服务与
 ## 5. 设计与接口文档
 
 - [API Contract](./API_CONTRACT.md)
+- [InfTest 当前需要对接的接口清单](./InfTest_当前需要对接的接口清单.md)
+- [InfTest 接口对接对象与当前结构](./InfTest_接口对接对象与当前结构.md)
 - [InfTest 主 Agent 接口交互专用文档](./InfTest_主Agent接口交互专用文档.md)
 - [InfTest 主 Agent 状态机 / Skill / Hook 设计](./InfTest_主Agent状态机SkillHook设计.md)
 - [Architecture](./ARCHITECTURE.md)
@@ -60,6 +62,10 @@ Postman 测试用例文档记录如何用 Postman 模拟智能体代理服务与
 - [CCB InfTest 主 Agent 改造计划](./CCB_InfTest主Agent改造计划.md)
 
 用途：看目标架构、接口定义、主 Agent 规划设计。
+
+当前需要对接的接口清单是现场联调短版，只列当前要对的接口和顺序。
+
+接口对接对象与当前结构文档用于现场回答“现在应该和谁对接口”：优先对智能体代理服务 HTTP，其次分别找执行 Agent、报告 Agent、模型服务负责人确认运行依赖。
 
 主 Agent 专用接口文档从完整接口文档中抽出 Planner Agent 直接相关的调用方、被调用接口、主动回调接口、CLI 子 Agent 接口和 Postman 实验路径。
 
