@@ -1,19 +1,11 @@
 import { z } from 'zod/v4'
-import { runInfTestAvailableAgentsE2E } from '../AvailableAgentsRunner.js'
-import { runInfTestFakeE2E } from '../FakeE2ERunner.js'
-import { InfTestQueryRunner } from '../InfTestQueryRunner.js'
-import { InfTestStepwiseQueryRunner } from '../InfTestStepwiseQueryRunner.js'
-import { InvalidInfTestStateTransitionError } from '../InfTestStateMachine.js'
-import { runInfTestStatefulRunner } from '../StatefulRunner.js'
-import { bootstrapInfTestHeadless } from '../headlessBootstrap.js'
 import {
   AlterTaskRequestSchema,
   resolveExecId,
   TerminateTaskRequestSchema,
-  type StartTaskData,
 } from '../schemas/api.js'
-import type { InfTestFakeE2EStep } from '../FakeE2ERunner.js'
-import type { InfTestRunnerMode, TaskSession } from '../schemas/session.js'
+import { TaskSessionManager } from '../TaskSessionManager.js'
+import { logEvent } from '../observability/logger.js'
 import { handleChatStream } from './chatStream.js'
 import {
   apiError,
@@ -26,55 +18,26 @@ import {
   handlePlannerApiStubRequest,
   isPlannerApiStubPath,
 } from './plannerApiStub.js'
+import { resolveExecIdFromPlanContext } from './plannerApiRealHandler.js'
 import {
-  buildTaskMessage,
-  finishSessionFromAvailableResult,
-  finishSessionFromFakeResult,
-  finishSessionFromQueryResult,
-  finishSessionFromStatefulResult,
-  TaskSessionManager,
-  TaskSessionNotFoundError,
-  toTaskResponse,
-} from '../TaskSessionManager.js'
-import { registerInfTestSessionManager } from '../taskSessionRegistry.js'
+  handlePlanRevisionStream,
+  isPlanRevisionPayload,
+  planRevisionInputFromRecord,
+} from './planRevisionStream.js'
+import { persistUserInstructionFromPayload } from './userInstructionStore.js'
+import {
+  applyTaskControl,
+  executeTaskStartSync,
+  getTaskExecutionSessionManager,
+} from './taskExecutionService.js'
 
-const taskSessionManager = new TaskSessionManager()
-registerInfTestSessionManager(taskSessionManager)
-
-export type InfTestTaskApiServerOptions = {
-  hostname?: string
-  port?: number
-}
-
-async function readJson(request: Request): Promise<unknown> {
-  const text = await request.text()
-  if (text.trim() === '') return {}
-  return JSON.parse(text) as unknown
-}
-
-function readRunnerMode(): InfTestRunnerMode {
-  if (process.env.INFTEST_STATEFUL_RUNNER === '1') return 'stateful'
-  if (process.env.INFTEST_RUNNER === 'stateful') return 'stateful'
-  if (process.env.INFTEST_RUNNER === 'query') return 'query'
-  if (process.env.INFTEST_RUNNER === 'available') return 'available'
-  return 'fake'
-}
-
-function readOrchestration(): 'aggregate' | 'stepwise' {
-  return process.env.INFTEST_ORCHESTRATION === 'stepwise'
-    ? 'stepwise'
-    : 'aggregate'
-}
-
-function readAvailableTimeoutSeconds(): number {
-  const value = Number(process.env.INFTEST_TIMEOUT_SECONDS ?? 900)
-  return Number.isFinite(value) ? value : 900
-}
-
-function parseTaskIdFromPath(pathname: string): string | null {
-  const match = /^\/tasks\/([^/]+)$/.exec(pathname)
-  if (!match?.[1]) return null
-  return decodeURIComponent(match[1])
+function readRunnerMode() {
+  if (process.env.INFTEST_STATEFUL_RUNNER === '1') return 'stateful' as const
+  if (process.env.INFTEST_RUNNER === 'stateful') return 'stateful' as const
+  if (process.env.INFTEST_RUNNER === 'query') return 'query' as const
+  if (process.env.INFTEST_RUNNER === 'available') return 'available' as const
+  if (process.env.INFTEST_RUNNER === 'fake') return 'fake' as const
+  return 'stateful' as const
 }
 
 function taskNotFoundResponse(taskId: string): Response {
@@ -98,163 +61,181 @@ function invalidRequestResponse(
   return jsonApiResponse(apiError(400, detail), 400)
 }
 
-function startDataFromSession(
-  session: TaskSession,
-  extra?: Partial<StartTaskData>,
-): StartTaskData {
-  const response = toTaskResponse(session)
-  return {
-    exec_id: response.task_id,
-    task_id: response.task_id,
-    task_status: response.status,
-    current_stage: session.current_stage,
-    workspace: response.workspace,
-    runner: response.runner,
-    artifacts: response.artifacts,
-    run_fake_e2e_invoked: session.run_fake_e2e_invoked,
-    ...extra,
-  }
+function parseTaskIdFromPath(pathname: string): string | null {
+  const match = /^\/tasks\/([^/]+)$/.exec(pathname)
+  if (!match?.[1]) return null
+  return decodeURIComponent(match[1])
 }
 
-async function handleTaskStart(
-  taskId: string,
-  runner: InfTestRunnerMode,
-): Promise<Response> {
-  bootstrapInfTestHeadless()
-  taskSessionManager.start(taskId, runner)
+const activePayloadStreams = new Set<string>()
 
-  if (runner === 'query') {
-    const orchestration = readOrchestration()
-    const controller = taskSessionManager.beginQueryAbortScope(taskId)
-    try {
-      const queryResult =
-        orchestration === 'stepwise'
-          ? await new InfTestStepwiseQueryRunner({
-              abortController: controller,
-            }).runTask(taskId)
-          : await new InfTestQueryRunner({
-              abortController: controller,
-            }).runTask(taskId)
-      const session = finishSessionFromQueryResult(
-        taskSessionManager,
-        taskId,
-        queryResult,
-      )
-      const steps =
-        queryResult.tool_result?.steps?.map((s: InfTestFakeE2EStep) => ({
-          name: s.name,
-          status: s.status,
-          duration_ms: s.duration_ms,
-          message: s.message,
-        })) ?? []
-      const data = startDataFromSession(session, {
-        orchestration: queryResult.orchestration ?? orchestration,
-        steps:
-          orchestration === 'aggregate' ? steps : steps.length > 0 ? steps : [],
-      })
-      const message =
-        queryResult.final_model_reply && session.status === 'SUCCESS'
-          ? queryResult.final_model_reply
-          : buildTaskMessage(session)
-      if (session.status === 'SUCCESS') {
-        return jsonApiResponse(apiSuccess(data, message))
-      }
-      return jsonApiResponse(apiError(500, message), 500)
-    } finally {
-      taskSessionManager.endQueryAbortScope(taskId)
+async function handleApiPayloadStream(request: Request): Promise<Response> {
+  if (request.method !== 'POST') {
+    return jsonApiResponse(apiError(405, 'Method not allowed'), 405)
+  }
+  let body: unknown = {}
+  try {
+    const text = await request.text()
+    body = text.trim() === '' ? {} : (JSON.parse(text) as unknown)
+  } catch {
+    return jsonApiResponse(apiError(400, 'Invalid JSON body'), 400)
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return jsonApiResponse(apiError(400, 'Invalid payload body'), 400)
+  }
+  const record = body as Record<string, unknown>
+  const requestId =
+    (typeof record.request_id === 'string' && record.request_id.trim()) ||
+    request.headers.get('x-request-id') ||
+    null
+
+  persistUserInstructionFromPayload(record)
+
+  if (isPlanRevisionPayload(record)) {
+    const revisionInput = planRevisionInputFromRecord(record, requestId)
+    if (!revisionInput) {
+      return jsonApiResponse(apiError(400, 'Invalid plan revision payload'), 400)
     }
+    return handlePlanRevisionStream(revisionInput)
   }
 
-  if (runner === 'available') {
-    const availableResult = await runInfTestAvailableAgentsE2E({
-      task_id: taskId,
-      timeout_seconds: readAvailableTimeoutSeconds(),
-    })
-    const session = finishSessionFromAvailableResult(
-      taskSessionManager,
-      taskId,
-      availableResult,
+  if (requestId && activePayloadStreams.has(requestId)) {
+    return jsonApiResponse(
+      apiError(409, `payload stream already active for request_id ${requestId}`),
+      409,
     )
-    const data = startDataFromSession(session, {
-      orchestration: 'aggregate',
-      steps: availableResult.steps.map(s => ({
-        name: s.name,
-        status: s.status,
-        duration_ms: s.duration_ms,
-        message: s.message,
-      })),
-    })
-    const message = buildTaskMessage(session)
-    if (session.status === 'SUCCESS') {
-      return jsonApiResponse(apiSuccess(data, message))
-    }
-    return jsonApiResponse(apiError(500, message), 500)
   }
-
-  if (runner === 'stateful') {
-    const statefulResult = await runInfTestStatefulRunner({
-      task_id: taskId,
-      timeout_seconds: readAvailableTimeoutSeconds(),
-      session_manager: taskSessionManager,
-    })
-    const session = finishSessionFromStatefulResult(
-      taskSessionManager,
-      taskId,
-      statefulResult,
+  const execId =
+    (typeof record.exec_id === 'string' && record.exec_id.trim()) ||
+    (typeof record.task_id === 'string' && record.task_id.trim()) ||
+    (typeof record.plan_id === 'string' && record.plan_id.trim()
+      ? resolveExecIdFromPlanContext(record.plan_id.trim())
+      : null)
+  if (!execId) {
+    return jsonApiResponse(
+      apiError(400, 'exec_id or task_id (or resolvable plan_id) is required'),
+      400,
     )
-    const data = startDataFromSession(session, {
-      orchestration: 'stateful',
-      steps: statefulResult.steps.map(s => ({
-        name: s.name,
-        status: s.status,
-        duration_ms: s.duration_ms,
-        message: s.message,
-      })),
-      current_stage: session.current_stage,
-    })
-    const message = buildTaskMessage(session)
-    if (session.status === 'SUCCESS') {
-      return jsonApiResponse(apiSuccess(data, message))
-    }
-    return jsonApiResponse(apiError(500, message), 500)
+  }
+  const userId =
+    (typeof record.user_id === 'string' && record.user_id.trim()) || 'payload-user'
+  const userInstruction =
+    (typeof record.user_instruction === 'string' && record.user_instruction.trim()) ||
+    ''
+  if (!userInstruction) {
+    return jsonApiResponse(apiError(400, 'user_instruction is required'), 400)
   }
 
-  const fakeResult = await runInfTestFakeE2E({ task_id: taskId })
-  const session = finishSessionFromFakeResult(
-    taskSessionManager,
-    taskId,
-    fakeResult,
-  )
-  const data = startDataFromSession(session, {
-    orchestration: 'aggregate',
-    steps: fakeResult.steps.map(s => ({
-      name: s.name,
-      status: s.status,
-      duration_ms: s.duration_ms,
-      message: s.message,
-    })),
-  })
-  const message = buildTaskMessage(session)
-  if (session.status === 'SUCCESS') {
-    return jsonApiResponse(apiSuccess(data, message))
-  }
-  return jsonApiResponse(apiError(500, message), 500)
-}
-
-function handleGetTask(taskId: string): Response {
-  const session = taskSessionManager.get(taskId)
-  if (!session) {
-    return taskNotFoundResponse(taskId)
-  }
-  return jsonApiResponse(
-    apiSuccess({
-      task_detail: sessionToTaskDetail(session),
+  const streamRequest = new Request('http://127.0.0.1/tasks/chat/stream', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      exec_id: execId,
+      task_id: execId,
+      user_instruction: userInstruction,
     }),
-  )
+  })
+  if (requestId) activePayloadStreams.add(requestId)
+  let response: Response
+  try {
+    response = await handleChatStream(
+      streamRequest,
+      getTaskExecutionSessionManager(),
+    )
+  } catch {
+    response = new Response(null, { status: 503 })
+  }
+  if (response.status === 503) {
+    const session = getTaskExecutionSessionManager().get(execId)
+    const statusText = session?.status ?? 'UNKNOWN'
+    const messageId = requestId ?? `${execId}-${Date.now()}`
+    const encoder = new TextEncoder()
+    const fallbackStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `event: chunk\ndata: ${JSON.stringify({
+              code: 0,
+              message: 'success',
+              data: {
+                exec_id: execId,
+                task_id: execId,
+                chunk: `Fallback payload stream: task ${execId} is ${statusText}. ${userInstruction}`,
+                finished: false,
+                message_id: messageId,
+              },
+            })}\n\n`,
+          ),
+        )
+        controller.enqueue(
+          encoder.encode(
+            `event: chunk\ndata: ${JSON.stringify({
+              code: 0,
+              message: 'success',
+              data: {
+                exec_id: execId,
+                task_id: execId,
+                chunk: '',
+                finished: true,
+                message_id: messageId,
+              },
+            })}\n\n`,
+          ),
+        )
+        controller.close()
+      },
+    })
+    if (requestId) activePayloadStreams.delete(requestId)
+    return new Response(fallbackStream, {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      },
+    })
+  }
+  if (!requestId) return response
+
+  if (response.status !== 200) {
+    activePayloadStreams.delete(requestId)
+    return response
+  }
+  if (!response.body) {
+    activePayloadStreams.delete(requestId)
+    return response
+  }
+  const original = response.body
+  const wrapped = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = original.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value) controller.enqueue(value)
+        }
+      } finally {
+        activePayloadStreams.delete(requestId)
+        controller.close()
+      }
+    },
+  })
+  return new Response(wrapped, { status: response.status, headers: response.headers })
+}
+
+function taskIdFromQuery(url: URL): string | null {
+  const taskId = url.searchParams.get('task_id') ?? url.searchParams.get('exec_id')
+  if (!taskId) return null
+  const trimmed = taskId.trim()
+  return trimmed === '' ? null : trimmed
 }
 
 async function handleTasksAlter(request: Request): Promise<Response> {
-  const parsed = AlterTaskRequestSchema.safeParse(await readJson(request))
+  const text = await request.text()
+  const body = text.trim() === '' ? {} : (JSON.parse(text) as unknown)
+  const parsed = AlterTaskRequestSchema.safeParse(body)
   if (!parsed.success) {
     return invalidRequestResponse(
       'Invalid alter task request',
@@ -266,29 +247,27 @@ async function handleTasksAlter(request: Request): Promise<Response> {
   const execId = resolveExecId(parsed.data)
 
   if (task_operation === 'START') {
-    return handleTaskStart(execId, readRunnerMode())
+    const result = await executeTaskStartSync(execId, readRunnerMode())
+    if (result.code === 0 && result.data) {
+      return jsonApiResponse(apiSuccess(result.data, result.message))
+    }
+    if (result.data) {
+      return jsonApiResponse(apiError(result.code, result.message), result.httpStatus)
+    }
+    return jsonApiResponse(apiError(result.code, result.message), result.httpStatus)
   }
 
-  try {
-    taskSessionManager.applyControl(execId, task_operation)
-    const messages: Record<'PAUSE' | 'CONTINUE', string> = {
-      PAUSE: 'Task paused',
-      CONTINUE: 'Task continued',
-    }
-    return jsonApiResponse(apiMessage(messages[task_operation]))
-  } catch (error) {
-    if (error instanceof TaskSessionNotFoundError) {
-      return taskNotFoundResponse(error.taskId)
-    }
-    if (error instanceof InvalidInfTestStateTransitionError) {
-      return invalidRequestResponse(error.message)
-    }
-    throw error
+  const control = applyTaskControl(execId, task_operation)
+  if (control.code === 0) {
+    return jsonApiResponse(apiMessage(control.message))
   }
+  return jsonApiResponse(apiError(control.code, control.message), control.httpStatus)
 }
 
 async function handleTasksTerminate(request: Request): Promise<Response> {
-  const parsed = TerminateTaskRequestSchema.safeParse(await readJson(request))
+  const text = await request.text()
+  const body = text.trim() === '' ? {} : (JSON.parse(text) as unknown)
+  const parsed = TerminateTaskRequestSchema.safeParse(body)
   if (!parsed.success) {
     return invalidRequestResponse(
       'Invalid terminate task request',
@@ -297,25 +276,33 @@ async function handleTasksTerminate(request: Request): Promise<Response> {
   }
 
   const execId = resolveExecId(parsed.data)
-
-  try {
-    taskSessionManager.applyControl(execId, 'TERMINATE')
-    return jsonApiResponse(apiMessage('Task terminated'))
-  } catch (error) {
-    if (error instanceof TaskSessionNotFoundError) {
-      return taskNotFoundResponse(error.taskId)
-    }
-    if (error instanceof InvalidInfTestStateTransitionError) {
-      return invalidRequestResponse(error.message)
-    }
-    throw error
+  const control = applyTaskControl(execId, 'TERMINATE')
+  if (control.code === 0) {
+    return jsonApiResponse(apiMessage(control.message))
   }
+  return jsonApiResponse(apiError(control.code, control.message), control.httpStatus)
 }
 
-export async function handleInfTestTaskApiRequest(
+function handleGetTask(taskId: string): Response {
+  const session = getTaskExecutionSessionManager().get(taskId)
+  if (!session) {
+    return taskNotFoundResponse(taskId)
+  }
+  return jsonApiResponse(
+    apiSuccess({
+      task_detail: sessionToTaskDetail(session),
+    }),
+  )
+}
+
+async function dispatchInfTestTaskApiRequest(
   request: Request,
 ): Promise<Response> {
   const url = new URL(request.url)
+
+  if (url.pathname === '/api/payload') {
+    return handleApiPayloadStream(request)
+  }
 
   if (isPlannerApiStubPath(url.pathname)) {
     return handlePlannerApiStubRequest(request)
@@ -335,6 +322,13 @@ export async function handleInfTestTaskApiRequest(
     return handleTasksAlter(request)
   }
 
+  if (url.pathname === '/api/tasks/alter') {
+    if (request.method !== 'POST') {
+      return jsonApiResponse(apiError(405, 'Method not allowed'), 405)
+    }
+    return handleTasksAlter(request)
+  }
+
   if (url.pathname === '/tasks/terminate') {
     if (request.method !== 'POST') {
       return jsonApiResponse(apiError(405, 'Method not allowed'), 405)
@@ -342,8 +336,26 @@ export async function handleInfTestTaskApiRequest(
     return handleTasksTerminate(request)
   }
 
+  if (url.pathname === '/api/tasks/terminate') {
+    if (request.method !== 'POST') {
+      return jsonApiResponse(apiError(405, 'Method not allowed'), 405)
+    }
+    return handleTasksTerminate(request)
+  }
+
   if (url.pathname === '/tasks/chat/stream') {
-    return handleChatStream(request, taskSessionManager)
+    return handleChatStream(request, getTaskExecutionSessionManager())
+  }
+
+  if (url.pathname === '/api/tasks/detail') {
+    if (request.method !== 'GET') {
+      return jsonApiResponse(apiError(405, 'Method not allowed'), 405)
+    }
+    const taskId = taskIdFromQuery(url)
+    if (!taskId) {
+      return jsonApiResponse(apiError(400, 'task_id is required'), 400)
+    }
+    return handleGetTask(taskId)
   }
 
   const taskIdFromPath = parseTaskIdFromPath(url.pathname)
@@ -357,9 +369,44 @@ export async function handleInfTestTaskApiRequest(
   return jsonApiResponse(apiError(404, 'Not found'), 404)
 }
 
+export async function handleInfTestTaskApiRequest(
+  request: Request,
+): Promise<Response> {
+  const startedAt = Date.now()
+  const url = new URL(request.url)
+  const requestId = request.headers.get('x-request-id')
+  try {
+    const response = await dispatchInfTestTaskApiRequest(request)
+    logEvent('info', 'http.request', {
+      request_id: requestId,
+      method: request.method,
+      path: url.pathname,
+      query: url.search,
+      status: response.status,
+      latency_ms: Date.now() - startedAt,
+    })
+    return response
+  } catch (error) {
+    logEvent('error', 'http.request.unhandled_error', {
+      request_id: requestId,
+      method: request.method,
+      path: url.pathname,
+      query: url.search,
+      latency_ms: Date.now() - startedAt,
+      error,
+    })
+    return jsonApiResponse(apiError(500, 'Internal server error'), 500)
+  }
+}
+
 function readPort(): number {
   const value = Number(process.env.INFTEST_PORT ?? 8787)
   return Number.isInteger(value) && value > 0 ? value : 8787
+}
+
+export type InfTestTaskApiServerOptions = {
+  hostname?: string
+  port?: number
 }
 
 export function startInfTestTaskApiServer(
@@ -376,7 +423,7 @@ export function startInfTestTaskApiServer(
 
 /** @internal test-only */
 export function getInfTestTaskSessionManagerForTests(): TaskSessionManager {
-  return taskSessionManager
+  return getTaskExecutionSessionManager()
 }
 
 if (import.meta.main) {

@@ -5,6 +5,8 @@
 > 当前推荐联调模式：`INFTEST_RUNNER=stateful`。
 
 > 2026-05-28 字段更新：对外 HTTP 请求统一使用 `exec_id` 作为执行任务标识；代码内部和部分历史文档中的 `task_id` 暂时作为兼容别名保留。
+>
+> 2026-05-29 口径更新：`/api/*` 已全量 real 化，成功语义为“已受理”，不再是 stub 固定成功返回。
 
 ## 1. 你现在应该和谁对接口
 
@@ -12,7 +14,7 @@
 
 | 对接对象 | 是否直接对主 Agent | 你要对什么 | 当前目标 |
 |---|---:|---|---|
-| 智能体代理服务 Agent Service | 是 | HTTP API | 对主 Agent base URL、`/api/*` stub、`/tasks/alter`、`/tasks/{task_id}` |
+| 智能体代理服务 Agent Service | 是 | HTTP API | 对主 Agent base URL、`/api/*` real（异步受理）、`/tasks/alter`、`/tasks/{task_id}` |
 | 执行 Agent / `gui-tester` 负责人 | 不是平台 HTTP，但必须联调 | CLI + 本地 API | 确认 `front/api_server.py`、`run_API.py`、`API_PORT`、设备或设备 mock |
 | 报告 Agent 负责人 | 不是平台 HTTP，但必须联调 | CLI + 模型配置 | 确认 `run_report.py`、需求文档、模型服务 `.env` |
 | 模型服务 / 模型网关负责人 | 间接依赖 | OpenAI-compatible API | 确认报告 Agent 的 `BASE_URL`、`MODEL`、`API_KEY` 可用 |
@@ -492,8 +494,9 @@ Planner stub 请求日志：
 - `POST /api/plan-task-publish`
 - `POST /api/case-publish`
 - `POST /api/task-report-generate`
-- `POST /api/task-manage`
 - `POST /api/user-instruction`
+
+`/api/task-manage` 已从 stub 升级为 real（异步），见 13.7。
 - `POST /api/payload`
 
 ### 10.3 当前是静态本地能力
@@ -522,9 +525,14 @@ INFTEST_MOCK_DEVICE=1
 
 你们先打 GET /health 验证服务。
 然后打 /api/generate-plan、/api/task-manage 等 /api/* 验证 Planner API 合同。
-这些 /api/* 当前是 stub，只返回 code=0 并落日志，不会启动真实任务。
+这些 /api/*（除 `/api/task-manage`）当前是 stub，只返回 code=0 并落日志，不会启动真实任务。
 
-真正启动任务请打 POST /tasks/alter：
+真实任务控制入口：
+
+- 异步：`POST /api/task-manage`（`START/RESTART` 立即 ACK）
+- 同步：`POST /tasks/alter`（`START` 等待执行完成）
+
+同步启动示例：
 {"task_id":"task-server-001","task_operation":"START"}
 
 任务状态用 GET /tasks/task-server-001 查。
@@ -649,6 +657,26 @@ Planner `/api/*` stub 支持这两个通用请求 ID 来源：
 
 ```text
 .inftest-workspace/planner-api-stub/<request_id>.json
+
+### 13.2.1 2026-05-29 口径更新（覆盖旧 stub 描述）
+
+`/api/*` 已全量 real 化，以下语义覆盖旧版文档中 “当前状态：stub” 的描述：
+
+| 接口 | 当前状态 | 说明 |
+|---|---|---|
+| `/api/generate-plan` | real（异步受理） | 建立/更新计划上下文，返回 `plan_status` |
+| `/api/plan-task-publish` | real（异步受理） | 下发任务列表，建立 `plan_id -> exec_id[]` 映射 |
+| `/api/case-publish` | real（异步受理） | 绑定用例到 exec 上下文 |
+| `/api/task-report-generate` | real（状态驱动） | 根据执行状态返回报告可用性，不再固定 stub 成功 |
+| `/api/task-manage` | real（异步） | `START/RESTART` 异步，`PAUSE/CONTINUE/TERMINATION` 实时控制 |
+| `/api/user-instruction` | real（异步受理） | 写入任务/计划指令上下文 |
+| `/api/payload` | real（异步受理） | 兼容 payload 指令入口，按用户指令链路处理 |
+
+统一约束：
+
+- 成功返回仅表示“已受理/状态可用”，最终结果请查询 `GET /tasks/{exec_id}`。
+- 返回主结构保持兼容：`code/message/data`。
+- 请求幂等建议依赖 `request_id`。
 ```
 
 ### 13.3 `/api/generate-plan`
@@ -832,33 +860,45 @@ Planner `/api/*` stub 支持这两个通用请求 ID 来源：
 
 ### 13.7 `/api/task-manage`
 
-当前状态：stub，不启动真实任务。
+当前状态：**real（异步）**，会触发真实任务控制。
 
 请求必填字段：
 
 | 字段 | 类型 | 当前校验 | 说明 |
 |---|---|---|---|
-| `task_id` | string | 必填，非空 | 任务 ID |
+| `exec_id` 或 `task_id` | string | 必填，非空 | 执行任务 ID |
 | `task_operation` | enum | 必填 | `START` / `PAUSE` / `CONTINUE` / `TERMINATION` / `RESTART` |
 
-当前响应 `data`：
+操作语义：
+
+| 操作 | 行为 | 返回时机 |
+|---|---|---|
+| `START` | 异步启动真实任务 | 立即 ACK，`task_status=PENDING` |
+| `RESTART` | 先终止旧任务（若存在）再异步启动 | 立即 ACK |
+| `PAUSE` | 真实暂停 | 同步返回 |
+| `CONTINUE` | 真实继续 | 同步返回 |
+| `TERMINATION` | 真实终止 | 同步返回 |
+
+当前响应 `data`（`START/RESTART`）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `request_id` | string | 请求 ID |
 | `endpoint` | string | `/api/task-manage` |
-| `accepted` | boolean | 固定 `true` |
-| `stub` | boolean | 固定 `true` |
-| `task_id` | string | 透传请求里的 `task_id` |
+| `accepted` | boolean | 是否受理 |
+| `stub` | boolean | 固定 `false` |
+| `async` | boolean | 固定 `true` |
+| `exec_id` | string | 执行任务 ID |
+| `task_id` | string | 兼容字段，同 `exec_id` |
 | `task_operation` | string | 透传请求里的 `task_operation` |
-| `task_status` | string | `START/RESTART -> PENDING`，`PAUSE -> PAUSED`，`CONTINUE -> RUNNING`，`TERMINATION -> TERMINATED` |
+| `task_status` | string | `START/RESTART` 受理时为 `PENDING` |
 
 最小请求示例：
 
 ```json
 {
   "request_id": "req-task-manage-001",
-  "task_id": "task-001",
+  "exec_id": "exec-001",
   "task_operation": "START"
 }
 ```
@@ -866,8 +906,9 @@ Planner `/api/*` stub 支持这两个通用请求 ID 来源：
 注意：
 
 ```text
-/api/task-manage START 只返回 stub 成功，不创建真实任务。
-真实任务启动请用 /tasks/alter START。
+/api/task-manage START 只表示“已受理并开始异步执行”，不会等待任务跑完。
+最终结果请通过 GET /tasks/{exec_id} 查询。
+若需要同步等待执行完成，请使用 POST /tasks/alter START。
 ```
 
 ### 13.8 `/api/user-instruction` 和 `/api/payload`

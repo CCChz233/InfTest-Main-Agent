@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { getInfTestConfig } from '../config/loadInfTestConfig.js'
+import { logEvent } from '../observability/logger.js'
 import {
   parseSubAgentOutputJson,
   type SubAgentOutputJson,
@@ -17,6 +18,26 @@ export const SUBAGENT_NAMES = [
 ] as const
 
 export type SubAgentName = (typeof SUBAGENT_NAMES)[number]
+
+const MAX_STEP_LOG_CHARS = 20_000
+
+/**
+ * Combines a sub-agent's stdout/stderr into a single execution log string for
+ * the `step_log` field of the proxy task-status report. Output is trimmed to a
+ * bounded size to keep status payloads reasonable.
+ */
+export function buildSubAgentStepLog(
+  stdoutLog: string,
+  stderrLog: string,
+): string {
+  const parts: string[] = []
+  if (stdoutLog?.trim()) parts.push(stdoutLog.trim())
+  if (stderrLog?.trim()) parts.push(`[stderr]\n${stderrLog.trim()}`)
+  const combined = parts.join('\n')
+  return combined.length > MAX_STEP_LOG_CHARS
+    ? combined.slice(combined.length - MAX_STEP_LOG_CHARS)
+    : combined
+}
 
 export type InvokeSubAgentInput = {
   agent_name: SubAgentName
@@ -51,8 +72,57 @@ const AGENT_SCRIPTS: Record<SubAgentName, string> = {
 
 const runningProcesses = new Map<string, RunningSubprocess>()
 
+type EnvLaunchOverride = {
+  command: string
+  args: string[]
+  cwd: string
+} | null
+
 function processKey(taskId: string, agentName: SubAgentName): string {
   return `${taskId}:${agentName}`
+}
+
+function tokenizeArgs(raw: string): string[] {
+  const trimmed = raw.trim()
+  if (!trimmed) return []
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(item => typeof item === 'string')
+          .map(item => String(item))
+      }
+    } catch {
+      return []
+    }
+  }
+  const tokens = trimmed.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
+  return tokens.map(token => token.replace(/^['"]|['"]$/g, ''))
+}
+
+function resolveOverrideCwd(rawCwd: string | undefined): string {
+  if (!rawCwd || rawCwd.trim() === '') return REPO_ROOT
+  const trimmed = rawCwd.trim()
+  return resolve(REPO_ROOT, trimmed)
+}
+
+function envOverrideForAgent(agentName: SubAgentName): EnvLaunchOverride {
+  if (agentName === 'test_generation') {
+    const command = process.env.INFTEST_TEST_GENERATION_AGENT_CMD?.trim()
+    if (!command) return null
+    const argsRaw = process.env.INFTEST_TEST_GENERATION_AGENT_ARGS ?? ''
+    const cwd = resolveOverrideCwd(process.env.INFTEST_TEST_GENERATION_AGENT_CWD)
+    return { command, args: tokenizeArgs(argsRaw), cwd }
+  }
+  if (agentName === 'device_scheduler') {
+    const command = process.env.INFTEST_DEVICE_AGENT_CMD?.trim()
+    if (!command) return null
+    const argsRaw = process.env.INFTEST_DEVICE_AGENT_ARGS ?? ''
+    const cwd = resolveOverrideCwd(process.env.INFTEST_DEVICE_AGENT_CWD)
+    return { command, args: tokenizeArgs(argsRaw), cwd }
+  }
+  return null
 }
 
 export function getRunningSubAgentKeys(taskId?: string): string[] {
@@ -93,6 +163,14 @@ function buildSpawnArgv(input: InvokeSubAgentInput): {
     input.output_json,
     ...extraArgsToArgv(input.extra_args),
   ]
+
+  const envOverride = envOverrideForAgent(input.agent_name)
+  if (envOverride) {
+    return {
+      argv: [envOverride.command, ...envOverride.args, ...baseArgs],
+      cwd: envOverride.cwd,
+    }
+  }
 
   if (input.adapter_script) {
     const script = resolve(REPO_ROOT, input.adapter_script)
@@ -143,6 +221,44 @@ async function readStream(
 ): Promise<string> {
   if (!stream) return ''
   return new Response(stream).text()
+}
+
+/**
+ * Reads a subprocess stream incrementally, emitting each line to structured logs
+ * so sub-agent output is visible in journalctl during long-running invocations.
+ */
+async function readStreamWithLogging(
+  stream: ReadableStream<Uint8Array> | null,
+  event: string,
+  meta: Record<string, unknown>,
+  channel: 'stdout' | 'stderr',
+): Promise<string> {
+  if (!stream) return ''
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let lineBuffer = ''
+  let accumulated = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const chunk = decoder.decode(value, { stream: true })
+    accumulated += chunk
+    lineBuffer += chunk
+    let newlineIndex = lineBuffer.indexOf('\n')
+    while (newlineIndex !== -1) {
+      const line = lineBuffer.slice(0, newlineIndex).trim()
+      lineBuffer = lineBuffer.slice(newlineIndex + 1)
+      if (line) {
+        logEvent('info', event, { ...meta, channel, line })
+      }
+      newlineIndex = lineBuffer.indexOf('\n')
+    }
+  }
+  const trailing = lineBuffer.trim()
+  if (trailing) {
+    logEvent('info', event, { ...meta, channel, line: trailing })
+  }
+  return accumulated
 }
 
 function readValidatedOutput(
@@ -196,6 +312,16 @@ export class SubAgentAdapter {
 
     const startedAt = Date.now()
     const key = processKey(input.task_id, input.agent_name)
+    const logMeta = {
+      task_id: input.task_id,
+      agent_name: input.agent_name,
+      cwd,
+      output_json: input.output_json,
+    }
+    logEvent('info', 'subagent.invoke.start', {
+      ...logMeta,
+      cmd: argv.join(' '),
+    })
     const proc = Bun.spawn(argv, {
       cwd,
       stdout: 'pipe',
@@ -215,8 +341,8 @@ export class SubAgentAdapter {
     try {
       const [exitCode, stdoutLog, stderrLog] = await Promise.all([
         proc.exited,
-        readStream(proc.stdout),
-        readStream(proc.stderr),
+        readStreamWithLogging(proc.stdout, 'subagent.stream', logMeta, 'stdout'),
+        readStreamWithLogging(proc.stderr, 'subagent.stream', logMeta, 'stderr'),
       ])
 
       const resolvedExit = timedOut ? 124 : exitCode
@@ -224,6 +350,15 @@ export class SubAgentAdapter {
         input.output_json,
         input.agent_name,
       )
+
+      if (parseError) {
+        logEvent('error', 'subagent.output_parse_failed', {
+          task_id: input.task_id,
+          agent_name: input.agent_name,
+          output_json: input.output_json,
+          error: parseError,
+        })
+      }
 
       const exitOk = resolvedExit === 0
       const outputOk = output
@@ -250,6 +385,14 @@ export class SubAgentAdapter {
       } else if (output && output.status === 'FAILED') {
         error = output.error?.message ?? 'Sub agent status FAILED'
       }
+
+      logEvent(success ? 'info' : 'warn', 'subagent.invoke.finish', {
+        ...logMeta,
+        success,
+        exit_code: resolvedExit,
+        duration_ms: Date.now() - startedAt,
+        error,
+      })
 
       return {
         success,

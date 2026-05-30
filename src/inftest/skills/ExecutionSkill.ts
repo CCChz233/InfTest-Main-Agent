@@ -1,6 +1,8 @@
 import { access, readFile } from 'fs/promises'
 import { join } from 'path'
+import { buildExecutionStatusReportFromCaseResultJson } from '../adapters/executionStatusReport.js'
 import { SubAgentAdapter } from '../adapters/SubAgentAdapter.js'
+import { buildExecutionAgentExtraArgs } from '../server/userInstructionStore.js'
 import type { InfTestSkill, SkillInput, SkillResult } from './types.js'
 
 async function assertReadable(
@@ -40,6 +42,7 @@ export class ExecutionSkill implements InfTestSkill {
       output_json: outputJson,
       timeout_seconds: this.timeoutSeconds,
       adapter_script: 'scripts/inftest_real_execution_agent_adapter.py',
+      extra_args: buildExecutionAgentExtraArgs(input.workspace),
     })
     if (!result.success) {
       return {
@@ -77,7 +80,11 @@ export class ExecutionSkill implements InfTestSkill {
     )
     if (missingSummary) return missingSummary
 
-    await readFile(summary, 'utf8')
+    const caseResultJson = await readFile(caseResult, 'utf8')
+    const statusReport = buildExecutionStatusReportFromCaseResultJson(
+      caseResultJson,
+      'Execution agent completed',
+    )
     return {
       status: 'SUCCESS',
       artifacts: {
@@ -87,6 +94,12 @@ export class ExecutionSkill implements InfTestSkill {
         ...(result.output?.artifacts ?? {}),
       },
       message: 'Execution agent completed',
+      telemetry: {
+        agent_name: 'test_executor',
+        total_tokens: statusReport.total_tokens,
+        output_json: statusReport.output_json,
+        step_log: statusReport.step_log,
+      },
     }
   }
 }

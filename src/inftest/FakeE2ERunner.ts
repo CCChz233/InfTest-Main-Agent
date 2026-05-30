@@ -4,6 +4,7 @@ import { ExecutionResultWatcher } from './adapters/ExecutionResultWatcher.js'
 import { ProxyClient } from './adapters/ProxyClient.js'
 import { SubAgentAdapter } from './adapters/SubAgentAdapter.js'
 import { WorkspaceManager } from './adapters/WorkspaceManager.js'
+import { reportPlanFinalStatusWithUpload } from './planFinalReporter.js'
 import type { PlanDag } from './schemas/plan.js'
 import type { InfTestStage, TaskStatus } from './schemas/task.js'
 
@@ -148,6 +149,7 @@ async function reportFinalStatus(
   taskId: string,
   status: Extract<TaskStatus, 'SUCCESS' | 'FAILED'>,
   message: string,
+  analysisReportPath?: string,
 ): Promise<void> {
   await proxy.reportTaskUpdate({
     event_id: `${taskId}:final:${status.toLowerCase()}`,
@@ -158,6 +160,13 @@ async function reportFinalStatus(
     stage_operations: [],
     case_node_operations: [],
     case_detail_operations: [],
+  })
+  await reportPlanFinalStatusWithUpload({
+    task_id: taskId,
+    task_status: status,
+    analysis_report_path: analysisReportPath ?? null,
+    message,
+    proxy_client: proxy,
   })
 }
 
@@ -288,7 +297,13 @@ export async function runInfTestFakeE2E(
     })
 
     await runStep(steps, 'report_task_update:SUCCESS', async () => {
-      await reportFinalStatus(proxy, taskId, 'SUCCESS', 'Fake E2E completed')
+      await reportFinalStatus(
+        proxy,
+        taskId,
+        'SUCCESS',
+        'Fake E2E completed',
+        artifacts.analysis_report,
+      )
     })
 
     return {
@@ -304,7 +319,7 @@ export async function runInfTestFakeE2E(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await reportFinalStatus(proxy, taskId, 'FAILED', message)
+    await reportFinalStatus(proxy, taskId, 'FAILED', message, artifacts.analysis_report)
     return {
       task_id: taskId,
       status: 'FAILED',

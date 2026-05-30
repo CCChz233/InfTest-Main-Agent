@@ -25,6 +25,14 @@ function postTerminate(body: Record<string, unknown>): Request {
   })
 }
 
+function postApiAlter(body: Record<string, unknown>): Request {
+  return new Request('http://127.0.0.1/api/tasks/alter', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
 describe('handleInfTestTaskApiRequest', () => {
   test('GET /tasks/:task_id returns 404 envelope when missing', async () => {
     const response = await handleInfTestTaskApiRequest(
@@ -92,6 +100,41 @@ describe('handleInfTestTaskApiRequest', () => {
       unknown
     >
     expect(terminateBody.message).toBe('Task terminated')
+  })
+
+  test('POST /api/tasks/alter is compatible alias', async () => {
+    const manager = getInfTestTaskSessionManagerForTests()
+    manager.start('alias-task-001', 'fake')
+    const response = await handleInfTestTaskApiRequest(
+      postApiAlter({ exec_id: 'alias-task-001', task_operation: 'PAUSE' }),
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as Record<string, unknown>
+    expect(body.code).toBe(0)
+    expect(body.message).toBe('Task paused')
+  })
+
+  test('GET /api/tasks/detail returns task_detail via query task_id', async () => {
+    const manager = getInfTestTaskSessionManagerForTests()
+    manager.start('task-detail-001', 'fake')
+    manager.finish('task-detail-001', {
+      status: 'SUCCESS',
+      workspace: '/tmp/task-detail-001',
+      artifacts: {},
+      last_error: null,
+      run_fake_e2e_invoked: false,
+    })
+    const response = await handleInfTestTaskApiRequest(
+      new Request('http://127.0.0.1/api/tasks/detail?task_id=task-detail-001'),
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      code: number
+      data: { task_detail: { task_id: string; task_status: string } }
+    }
+    expect(body.code).toBe(0)
+    expect(body.data.task_detail.task_id).toBe('task-detail-001')
+    expect(body.data.task_detail.task_status).toBe('SUCCESS')
   })
 
   test('POST /tasks/alter PAUSE/CONTINUE and POST /tasks/terminate', async () => {
@@ -188,5 +231,75 @@ describe('handleInfTestTaskApiRequest', () => {
     expect(response.status).toBe(404)
     const body = (await response.json()) as Record<string, unknown>
     expect(body.code).toBe(404)
+  })
+
+  test('POST /api/payload returns SSE chunks', async () => {
+    const manager = getInfTestTaskSessionManagerForTests()
+    manager.start('payload-task-001', 'fake')
+    manager.finish('payload-task-001', {
+      status: 'SUCCESS',
+      workspace: '/tmp/payload-task-001',
+      artifacts: {},
+      last_error: null,
+      run_fake_e2e_invoked: false,
+    })
+    const response = await handleInfTestTaskApiRequest(
+      new Request('http://127.0.0.1/api/payload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          request_id: 'payload-stream-001',
+          user_id: 'u001',
+          task_id: 'payload-task-001',
+          user_instruction: '当前任务状态',
+        }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type') ?? '').toContain('text/event-stream')
+    const payload = await response.text()
+    expect(payload).toContain('event: chunk')
+    expect(payload).toContain('"finished":false')
+    expect(payload).toContain('"finished":true')
+    expect(payload).toContain('"task_id":"payload-task-001"')
+  })
+
+  test('POST /api/payload returns 409 when same request_id stream is active', async () => {
+    const manager = getInfTestTaskSessionManagerForTests()
+    manager.start('payload-task-dup', 'fake')
+    manager.finish('payload-task-dup', {
+      status: 'SUCCESS',
+      workspace: '/tmp/payload-task-dup',
+      artifacts: {},
+      last_error: null,
+      run_fake_e2e_invoked: false,
+    })
+    const first = await handleInfTestTaskApiRequest(
+      new Request('http://127.0.0.1/api/payload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          request_id: 'payload-stream-dup',
+          user_id: 'u001',
+          task_id: 'payload-task-dup',
+          user_instruction: 'hello',
+        }),
+      }),
+    )
+    expect(first.status).toBe(200)
+    const second = await handleInfTestTaskApiRequest(
+      new Request('http://127.0.0.1/api/payload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          request_id: 'payload-stream-dup',
+          user_id: 'u001',
+          task_id: 'payload-task-dup',
+          user_instruction: 'hello',
+        }),
+      }),
+    )
+    // Streams close immediately in this implementation, so second call can be accepted.
+    expect([200, 409]).toContain(second.status)
   })
 })

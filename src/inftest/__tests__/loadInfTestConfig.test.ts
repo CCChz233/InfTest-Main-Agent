@@ -21,6 +21,7 @@ afterEach(() => {
   delete process.env.OPENAI_BASE_URL
   delete process.env.OPENAI_API_KEY
   delete process.env.ANTHROPIC_MODEL
+  delete process.env.INFTEST_REAL_ONLY
 })
 
 describe('loadInfTestConfig', () => {
@@ -65,6 +66,13 @@ describe('loadInfTestConfig', () => {
       runner: 'stateful',
     })
     expect(process.env.INFTEST_RUNNER).toBe('stateful')
+  })
+
+  test('maps real_only config to INFTEST_REAL_ONLY', () => {
+    applyInfTestConfigToEnv({
+      real_only: true,
+    })
+    expect(process.env.INFTEST_REAL_ONLY).toBe('1')
   })
 
   test('infers openai provider and normalizes chat/completions base URL', () => {

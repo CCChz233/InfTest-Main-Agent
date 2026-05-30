@@ -111,20 +111,29 @@ export function buildManualTestCasesArtifact(cases: ManualCase[]): unknown {
   }
 }
 
+export function buildDeviceCaseBindArtifactForCases(
+  deviceId: string,
+  cases: ManualCase[],
+): unknown {
+  const deviceCase: Record<string, unknown> = {}
+  for (const testCase of cases) {
+    const key =
+      cases.length === 1 ? deviceId : `${deviceId}::${testCase.case_id}`
+    deviceCase[key] = {
+      case_id: testCase.case_id,
+      case_name: testCase.case_name,
+      case_step: testCase.case_step,
+      case_function_point: testCase.case_function_point,
+      test_scenario: testCase.test_scenario,
+      expected_result: testCase.expected_result,
+    }
+  }
+  return { device_case: deviceCase }
+}
+
 export function buildDeviceCaseBindArtifact(
   deviceId: string,
   testCase: ManualCase,
 ): unknown {
-  return {
-    device_case: {
-      [deviceId]: {
-        case_id: testCase.case_id,
-        case_name: testCase.case_name,
-        case_step: testCase.case_step,
-        case_function_point: testCase.case_function_point,
-        test_scenario: testCase.test_scenario,
-        expected_result: testCase.expected_result,
-      },
-    },
-  }
+  return buildDeviceCaseBindArtifactForCases(deviceId, [testCase])
 }

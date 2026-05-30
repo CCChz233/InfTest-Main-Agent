@@ -1,6 +1,5 @@
 import { appendFile, mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { ProxyClient } from './adapters/ProxyClient.js'
 import type { StageTransitionRecord, TaskSession } from './schemas/session.js'
 import type { InfTestStage, TaskStatus } from './schemas/task.js'
 import type { InfTestSkill, SkillResult } from './skills/types.js'
@@ -39,10 +38,7 @@ export class HookManager {
   private sequence = 0
   readonly experimentDir: string
 
-  constructor(
-    private readonly workspace: string,
-    private readonly proxyClient = new ProxyClient(),
-  ) {
+  constructor(private readonly workspace: string) {
     this.experimentDir = join(workspace, 'experiment')
   }
 
@@ -58,14 +54,6 @@ export class HookManager {
       current_stage: session.current_stage,
       previous_stage: session.previous_stage,
     })
-    if (session.current_stage) {
-      await this.reportStage(session).catch(error =>
-        this.writeHookEvent(session, 'onHookError', {
-          hook: 'onEnterStage',
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      )
-    }
   }
 
   async beforeSkillCall(
@@ -150,18 +138,6 @@ export class HookManager {
     transition: StageTransitionRecord,
   ): Promise<void> {
     await this.appendJsonl('state_transitions.jsonl', transition)
-  }
-
-  private async reportStage(session: TaskSession): Promise<void> {
-    await this.proxyClient.reportTaskUpdate({
-      event_id: `${session.task_id}:stateful:enter:${session.current_stage?.toLowerCase()}`,
-      task_id: session.task_id,
-      current_stage: session.current_stage ?? undefined,
-      message: `Stateful runner entered ${session.current_stage}`,
-      stage_operations: [],
-      case_node_operations: [],
-      case_detail_operations: [],
-    })
   }
 
   private async writeHookEvent(

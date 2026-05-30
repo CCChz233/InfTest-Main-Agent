@@ -14,8 +14,8 @@
 - 执行 Agent 真实入口是 `gui-tester/run_API.py`。
 - 报告 Agent 真实入口是 `inftest-report-agent/run_report.py`。
 - 当前没有接真实用例生成 Agent，主 Agent 仍使用静态用例。
-- 当前设备调度仍是本地静态绑定。
-- Planner `/api/*` 接口当前是 stub，只收请求、校验、落日志、返回 `code=0`，不触发真实执行链路。
+- 设备调度可通过 `INFTEST_REAL_DEVICE_SCHEDULER=1` 调用 `inftest_execute_agent` 的 `device_agent`（`scripts/inftest_real_device_scheduler_adapter.py`）。
+- Planner `/api/*` 已全量 real 化（异步受理为主），不再返回固定 stub 成功。
 
 不要使用：
 
@@ -48,7 +48,27 @@ INFTEST_MOCK_DEVICE=1
 INFTEST_EXECUTION_AGENT_CWD=<server gui-tester path>
 INFTEST_REPORT_AGENT_CWD=<server report-agent path>
 INFTEST_REQUIREMENT_DOC=<server requirement doc path>
+INFTEST_DEVICE_AGENT_CWD=<server inftest_execute_agent path>
 ```
+
+启用真实设备调度（COORDINATE 阶段）：
+
+```bash
+export INFTEST_REAL_DEVICE_SCHEDULER=1
+export INFTEST_DEVICE_AGENT_CWD=/path/to/inftest_execute_agent
+# 必须与执行 Agent 使用同一 Python 环境（含 httpx、async_adbutils）：
+export INFTEST_DEVICE_AGENT_PYTHON=/root/miniconda3/envs/inftest_server/bin/python
+# 已知设备 ID 时（跳过 discover）：
+export INFTEST_DEVICE_ID=SM02G4061977180
+export INFTEST_DEVICE_AGENT_DISCOVER=false
+# Cloud 探测在线 executor 时：
+# export INFTEST_DEVICE_AGENT_CLOUD=1
+# export CMD_EXECUTOR_AGENT_URL=http://<proxy-host>:<port>
+```
+
+`inftest_execute_agent` 需安装依赖：`pip install -r requirements.txt`（含 `async_adbutils`、`httpx`）。
+
+联调验收：任务 workspace 下应出现 `device_scheduling/result.json` 且 `"source": "real_subagent"`，以及 `schedule_info.json`（含 `device_task_bind`）。
 
 ## 3. 部署前检查
 
@@ -194,9 +214,9 @@ http://<server-host>:8787
 
 ## 6. 首次联调验证
 
-### 6.1 验证 Planner stub 接口
+### 6.1 验证 Planner API（real）
 
-这些接口只验证平台和主 Agent 的 HTTP 连通性，不触发真实任务执行：
+这些接口已接入真实编排语义（异步受理，不阻塞执行完成）：
 
 ```text
 POST /api/generate-plan
@@ -217,7 +237,7 @@ POST /api/payload
 }
 ```
 
-日志目录：
+审计日志目录：
 
 ```text
 .inftest-workspace/planner-api-stub/
@@ -225,8 +245,10 @@ POST /api/payload
 
 注意：
 
-- `/api/task-manage START` 当前仍是 stub。
-- 真正触发主 Agent 执行链路要调用 `/tasks/alter START`。
+- `/api/*` 现在返回 `code=0` 表示“已受理”，不等于任务已最终成功。
+- `/api/task-manage START` 与 `/api/task-manage RESTART` 为异步：立即返回 `PENDING`。
+- 若需要同步等待执行完成，请调用 `/tasks/alter START`。
+- 任务状态查询统一使用：`GET /tasks/{exec_id}`。
 
 ### 6.2 触发 stateful runner
 
@@ -414,8 +436,8 @@ ImportError
 
 - 主 Agent 对外监听用 `INFTEST_HOST=0.0.0.0`，端口默认用 `8787`。
 - 智能体代理服务只需要访问主 Agent base URL：`http://<server-host>:8787`。
-- `/api/*` Planner 接口当前是联调 stub，不要误认为已经触发真实计划生成或真实任务执行。
-- 真正启动任务使用 `POST /tasks/alter`。
+- `/api/*` Planner 接口已 real 化，建议平台统一走 `/api/*`。
+- 同步触发模式仍保留 `POST /tasks/alter` 供运维验收使用。
 - `INFTEST_RUNNER=stateful` 是当前推荐模式。
 - `available` runner 只作为对照链路保留。
 - fake E2E 保留，但上线联调不应走 fake。
@@ -443,4 +465,4 @@ ImportError
 
 - 没有 `case_result.json`：先查执行 Agent、设备、`API_PORT`。
 - 有 `case_result.json` 但没有 `analysis/report.md`：先查报告 Agent 和模型服务。
-- `/api/*` 有日志但没有任务 workspace：这是正常的，因为 Planner `/api/*` 当前是 stub。
+- `/api/*` 有日志但没有任务 workspace：通常表示只受理了计划层请求，尚未执行 `task-manage START`。

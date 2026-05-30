@@ -138,6 +138,9 @@ export function applyInfTestConfigToEnv(config: InfTestConfig): void {
   if (config.runner) {
     setEnvIfUnset('INFTEST_RUNNER', config.runner)
   }
+  if (config.real_only !== undefined) {
+    setEnvIfUnset('INFTEST_REAL_ONLY', config.real_only ? '1' : '0')
+  }
   if (config.orchestration) {
     setEnvIfUnset('INFTEST_ORCHESTRATION', config.orchestration)
   }

@@ -2,6 +2,44 @@
 
 > 明天上服务器联调，优先看第 1 份。
 
+## 0. 下次任务只看这些（精简版）
+
+如果你只想看“真正有用”的文档，按这个顺序就够了：
+
+1. [InfTest 接口文档 (4)](./InfTest%20接口文档%20(4).md)  
+   最新总协议源头，路径和字段以这份为准。
+2. [InfTest 主 Agent 接口交互专用文档](./InfTest_主Agent接口交互专用文档.md)  
+   主 Agent 视角落地版（你和同事联调最常看）。
+3. [InfTest 当前需要对接的接口清单](./InfTest_当前需要对接的接口清单.md)  
+   最短核对清单，现场排查最快。
+3.1. [InfTest 主 Agent 接口未实现项清单](./InfTest_主Agent接口未实现项清单.md)  
+   与 [InfTest 接口文档智能体代理与主agent](./InfTest%20接口文档智能体代理与主agent.md) 逐节、逐字段对齐的实现差距表。
+4. [API Contract](./API_CONTRACT.md)  
+   接口速查版，排障时快速定位。
+5. [InfTest MainAgent 服务启动重启说明](./InfTest_MainAgent_服务启动重启说明.md)  
+   服务启停、健康检查、日志查看。
+6. [InfTest 服务器部署流程与注意事项](./InfTest_服务器部署流程与注意事项.md)  
+   上线部署主流程和常见坑。
+7. [InfTest 服务器部署联调手册](./InfTest_服务器部署联调手册.md)  
+   服务器联调实操步骤。
+8. [InfTest 当前可用 Agent 联调测试计划](./InfTest_当前可用Agent联调测试计划.md)  
+   真实链路验收步骤。
+9. [用例执行 Agent 使用文档](./subagent/用例执行Agent使用文档.md)  
+   执行 Agent 的真实输入输出规范。
+10. [测试报告生成 Agent 使用文档](./subagent/测试报告生成%20Agent%20使用文档.md)  
+    报告 Agent 的真实输入输出规范。
+
+### 可降级为“历史参考”
+
+以下文档保留即可，不建议作为“当前任务第一入口”：
+
+- `CCB_InfTest_开发进度.md`
+- `CCB_InfTest_开发任务清单.md`
+- `CCB_InfTest主Agent改造计划.md`
+- `InfTest_API全真模拟联调经验手册.md`
+- `InfTest_Mock后端端口Query模式联调手册.md`
+- `CCB_InfTest_操作手册.md`
+
 ## 1. 服务器部署与真实 Agent 联调
 
 - [InfTest 服务器部署流程与注意事项](./InfTest_服务器部署流程与注意事项.md)
@@ -54,6 +92,7 @@ Postman 测试用例文档记录如何用 Postman 模拟智能体代理服务与
 
 - [API Contract](./API_CONTRACT.md)
 - [InfTest 当前需要对接的接口清单](./InfTest_当前需要对接的接口清单.md)
+- [InfTest 主 Agent 接口未实现项清单](./InfTest_主Agent接口未实现项清单.md)
 - [InfTest 接口对接对象与当前结构](./InfTest_接口对接对象与当前结构.md)
 - [InfTest 主 Agent 接口交互专用文档](./InfTest_主Agent接口交互专用文档.md)
 - [InfTest 主 Agent 状态机 / Skill / Hook 设计](./InfTest_主Agent状态机SkillHook设计.md)

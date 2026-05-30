@@ -1,12 +1,16 @@
 import { access } from 'fs/promises'
 import { join } from 'path'
-import { ExecutionResultWatcher } from './adapters/ExecutionResultWatcher.js'
 import { ProxyClient } from './adapters/ProxyClient.js'
+import { resolveAgentName, mapPartialStopProxyStatus } from './adapters/updateTaskStatusPayload.js'
 import { WorkspaceManager } from './adapters/WorkspaceManager.js'
 import { HookManager } from './HookManager.js'
 import { InfTestStateMachine } from './InfTestStateMachine.js'
+import { logEvent } from './observability/logger.js'
+import { reportPlanFinalStatusWithUpload } from './planFinalReporter.js'
 import { TaskSessionManager } from './TaskSessionManager.js'
-import type { TaskStatus } from './schemas/task.js'
+import { resolveExecutionTimeoutSeconds } from './server/planContextArtifacts.js'
+import type { InfTestStage, TaskStatus } from './schemas/task.js'
+import type { ProxyAgentStatus } from './schemas/update.js'
 import {
   createDefaultSkillRegistry,
   SkillRegistry,
@@ -24,6 +28,19 @@ export type RunInfTestStatefulRunnerInput = {
   skill_registry?: SkillRegistry
   hook_manager?: HookManager
   state_machine?: InfTestStateMachine
+  /**
+   * When set, the runner stops after this stage completes successfully instead
+   * of advancing to the next stage. Used by plan-task-publish to run case
+   * generation only (stop_after_stage='DATA_GEN'), leaving the task PAUSED and
+   * awaiting case-publish to drive execution.
+   */
+  stop_after_stage?: InfTestStage
+  /**
+   * When set, the runner resumes an existing session at this stage instead of
+   * starting at PLANNING. Used by case-publish to run execution
+   * (start_from_stage='COORDINATE') with user-confirmed cases.
+   */
+  start_from_stage?: InfTestStage
 }
 
 export type InfTestStatefulRunnerStep = {
@@ -42,6 +59,8 @@ export type InfTestStatefulRunnerResult = {
   summary_found: boolean
   steps: InfTestStatefulRunnerStep[]
   error: string | null
+  /** Set when the runner stopped early due to stop_after_stage. */
+  stopped_after_stage?: InfTestStage | null
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -85,15 +104,80 @@ export async function runInfTestStatefulRunner(
 
   const hooks = input.hook_manager ?? new HookManager(workspace)
   const stateMachine = input.state_machine ?? new InfTestStateMachine()
+  const resolvedTimeout =
+    input.timeout_seconds ??
+    resolveExecutionTimeoutSeconds(
+      workspace,
+      Number(process.env.INFTEST_TIMEOUT_SECONDS ?? 900),
+    )
   const skills =
     input.skill_registry ??
     createDefaultSkillRegistry({
-      timeout_seconds: input.timeout_seconds,
+      timeout_seconds: resolvedTimeout,
       device_id: input.device_id,
     })
   const steps: InfTestStatefulRunnerStep[] = []
   let reportedCases: string[] = []
   let executionSummaryFound = false
+  const proxy = new ProxyClient()
+  const stopAfterStage = input.stop_after_stage ?? null
+  const startFromStage = input.start_from_stage ?? null
+
+  // Best-effort per-agent status report for the 4.1.3 任务状态上报 contract.
+  // Only the agent-owned stages are reported here; overall task completion is
+  // reported separately via reportPlanFinalStatusWithUpload.
+  const reportAgentStatus = async (params: {
+    stage: InfTestStage
+    status: Extract<TaskStatus, 'RUNNING' | 'SUCCESS' | 'FAILED' | 'PAUSED'>
+    proxyStatus?: ProxyAgentStatus
+    startedAtMs: number
+    endedAtMs?: number
+    result?: SkillResult
+    errorMessage?: string
+  }): Promise<void> => {
+    const agent = resolveAgentName({ current_stage: params.stage })
+    if (!agent) return
+    const telemetry = params.result?.telemetry
+    const proxyStatus = params.proxyStatus ?? undefined
+    try {
+      await proxy.reportTaskUpdate({
+        event_id: `${taskId}:${params.stage.toLowerCase()}:${(proxyStatus ?? params.status).toLowerCase()}`,
+        task_id: taskId,
+        agent_name: telemetry?.agent_name ?? agent,
+        task_status: params.status,
+        proxy_status: proxyStatus,
+        current_stage: params.stage,
+        total_tokens: telemetry?.total_tokens ?? 0,
+        output_json:
+          telemetry?.output_json ??
+          (params.stage === 'REFLECTING'
+            ? '{}'
+            : params.result
+              ? JSON.stringify(params.result.artifacts)
+              : ''),
+        step_log:
+          telemetry?.step_log ??
+          params.errorMessage ??
+          params.result?.message ??
+          '',
+        start_time: new Date(params.startedAtMs).toISOString(),
+        end_time:
+          params.status === 'RUNNING' && !proxyStatus
+            ? undefined
+            : new Date(params.endedAtMs ?? Date.now()).toISOString(),
+        stage_operations: [],
+        case_node_operations: [],
+        case_detail_operations: [],
+      })
+    } catch (error) {
+      logEvent('warn', 'stateful.report_agent_status.failed', {
+        task_id: taskId,
+        stage: params.stage,
+        status: params.status,
+        error,
+      })
+    }
+  }
 
   const patchSession = (next: typeof session): typeof session => {
     const patched = manager.patch(taskId, next)
@@ -122,6 +206,12 @@ export async function runInfTestStatefulRunner(
       status,
       message,
       artifacts: session.artifacts,
+    })
+    await reportPlanFinalStatusWithUpload({
+      task_id: taskId,
+      task_status: status,
+      workspace,
+      message,
     })
     return {
       task_id: taskId,
@@ -153,11 +243,72 @@ export async function runInfTestStatefulRunner(
     return finish('FAILED', message)
   }
 
+  // Early stop for stop_after_stage (e.g. case generation only). The task is
+  // parked as PAUSED so a later case-publish can drive execution. We do NOT
+  // report a final plan status here because the plan is not yet complete.
+  const finishPartial = async (
+    stage: InfTestStage,
+  ): Promise<InfTestStatefulRunnerResult> => {
+    const proxyStatus = mapPartialStopProxyStatus(stage)
+    const pauseMessage =
+      stage === 'DATA_GEN'
+        ? '用例生成完成，等待 case-publish 用户确认'
+        : '用例执行完成，等待 task-report-generate'
+
+    await reportAgentStatus({
+      stage,
+      status: 'PAUSED',
+      proxyStatus,
+      startedAtMs: Date.now(),
+      endedAtMs: Date.now(),
+      errorMessage: pauseMessage,
+    })
+
+    session = patchSession({
+      ...session,
+      active_skill: null,
+      status: 'PAUSED',
+      current_stage: stage,
+    })
+    logEvent('info', 'stateful.stopped_after_stage', {
+      task_id: taskId,
+      stage,
+    })
+    return {
+      task_id: taskId,
+      status: 'SUCCESS',
+      workspace,
+      artifacts: session.artifacts,
+      reported_cases: reportedCases,
+      summary_found: executionSummaryFound,
+      steps,
+      error: null,
+      stopped_after_stage: stage,
+    }
+  }
+
   try {
-    await hooks.onTaskStart(session)
-    session = patchSession(stateMachine.start(session))
-    await recordLatestTransition()
-    await hooks.onEnterStage(session)
+    if (startFromStage) {
+      // Resume an existing (typically PAUSED) session directly at the given
+      // stage, skipping PLANNING + DATA_GEN. Used by case-publish to drive
+      // execution with user-confirmed cases without regenerating them.
+      session = patchSession({
+        ...session,
+        status: 'RUNNING',
+        current_stage: startFromStage,
+        active_skill: null,
+      })
+      logEvent('info', 'stateful.start_from_stage', {
+        task_id: taskId,
+        stage: startFromStage,
+      })
+      await hooks.onEnterStage(session)
+    } else {
+      await hooks.onTaskStart(session)
+      session = patchSession(stateMachine.start(session))
+      await recordLatestTransition()
+      await hooks.onEnterStage(session)
+    }
 
     while (session.status === 'RUNNING' && session.current_stage) {
       const skill = skills.requireByStage(session.current_stage)
@@ -168,6 +319,8 @@ export async function runInfTestStatefulRunner(
       await hooks.beforeSkillCall(session, skill)
 
       const startedAt = Date.now()
+      const stage = skill.stage
+      await reportAgentStatus({ stage, status: 'RUNNING', startedAtMs: startedAt })
       let result: SkillResult
       try {
         result = await skill.run({
@@ -187,6 +340,13 @@ export async function runInfTestStatefulRunner(
         session = patchSession({
           ...session,
           active_skill: null,
+        })
+        await reportAgentStatus({
+          stage,
+          status: 'FAILED',
+          startedAtMs: startedAt,
+          endedAtMs: startedAt + durationMs,
+          errorMessage: message,
         })
         await hooks.onSkillError(session, skill, error)
         return fail(message)
@@ -210,20 +370,28 @@ export async function runInfTestStatefulRunner(
       })
 
       if (result.status === 'FAILED') {
+        await reportAgentStatus({
+          stage,
+          status: 'FAILED',
+          startedAtMs: startedAt,
+          endedAtMs: startedAt + durationMs,
+          result,
+          errorMessage: resultErrorMessage(result),
+        })
         await hooks.onSkillError(session, skill, result.error ?? result)
         return fail(resultErrorMessage(result))
       }
 
-      if (session.current_stage === 'EXECUTING') {
-        const watchResult = await new ExecutionResultWatcher(
-          new ProxyClient(),
-        ).watch({
-          task_id: taskId,
-          results_dir: join(workspace, 'execution', 'results'),
-          summary_path: join(workspace, 'execution', 'results', 'summary.json'),
-        })
-        reportedCases = watchResult.reported_cases
-        executionSummaryFound = watchResult.summary_found
+      await reportAgentStatus({
+        stage,
+        status: 'SUCCESS',
+        startedAtMs: startedAt,
+        endedAtMs: startedAt + durationMs,
+        result,
+      })
+
+      if (stopAfterStage && stage === stopAfterStage) {
+        return finishPartial(stage)
       }
 
       if (session.current_stage === 'COMPLETED') {

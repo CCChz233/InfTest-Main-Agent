@@ -8,6 +8,18 @@ export type SkillInput = {
   signal?: AbortSignal
 }
 
+export type SkillTelemetry = {
+  agent_name?:
+    | 'test_generation'
+    | 'test_data'
+    | 'device_scheduler'
+    | 'test_executor'
+    | 'result_analyzer'
+  total_tokens?: number
+  output_json?: string
+  step_log?: string
+}
+
 export type SkillResult = {
   status: 'SUCCESS' | 'FAILED'
   artifacts: Record<string, string>
@@ -16,6 +28,7 @@ export type SkillResult = {
     code: string
     message: string
   }
+  telemetry?: SkillTelemetry
 }
 
 export interface InfTestSkill {

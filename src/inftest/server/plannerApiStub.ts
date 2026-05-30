@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { join, resolve } from 'path'
 import { z } from 'zod/v4'
 import { apiError, apiSuccess, jsonApiResponse } from './apiResponse.js'
+import { dispatchPlannerApiReal } from './plannerApiRealHandler.js'
 
 const PLANNER_API_STUB_LOG_DIR = resolve(
   process.cwd(),
@@ -30,9 +31,47 @@ const PlanTaskPublishRequestSchema = z
   })
   .passthrough()
 
+const CasePublishStepSchema = z.object({
+  step_id: NonEmptyStringSchema,
+  action: NonEmptyStringSchema,
+  expected: z.string(),
+})
+
+const CasePublishCaseSchema = z.object({
+  case_id: NonEmptyStringSchema,
+  title: NonEmptyStringSchema,
+  conditions: z.string(),
+  steps: z.array(CasePublishStepSchema).min(1),
+})
+
+const CasePublishPlanDetailSchema = z.object({
+  test_objectives: z.string(),
+  test_scope: z.string(),
+  test_target: z.string(),
+  test_environment: z.string(),
+  resources: z.string(),
+  schedule: z.string(),
+  deliverables: z.string(),
+})
+
 const CasePublishRequestSchema = z
   .object({
     plan_id: NonEmptyStringSchema,
+    plan_name: NonEmptyStringSchema,
+    plan_detail: CasePublishPlanDetailSchema,
+    test_strategies: z.array(NonEmptyStringSchema).min(1),
+    test_env_url: NonEmptyStringSchema,
+    plan_config_info: z.record(z.string(), z.unknown()),
+    exec_id: NonEmptyStringSchema.optional(),
+    task_id: NonEmptyStringSchema.optional(),
+    cases: z.array(CasePublishCaseSchema).min(1),
+  })
+  .passthrough()
+
+const TaskReportCaseSchema = z
+  .object({
+    case_id: NonEmptyStringSchema,
+    case_name: NonEmptyStringSchema,
   })
   .passthrough()
 
@@ -40,6 +79,9 @@ const TaskReportGenerateRequestSchema = z
   .object({
     exec_id: NonEmptyStringSchema.optional(),
     task_id: NonEmptyStringSchema.optional(),
+    plan_id: NonEmptyStringSchema.optional(),
+    cases: z.array(TaskReportCaseSchema).min(1),
+    defects: z.array(z.record(z.string(), z.unknown())).optional(),
   })
   .passthrough()
 
@@ -63,6 +105,12 @@ const UserInstructionRequestSchema = z
   })
   .passthrough()
 
+const PayloadRequestSchema = z
+  .object({
+    user_instruction: NonEmptyStringSchema,
+  })
+  .passthrough()
+
 type PlannerApiStubEndpoint =
   | '/api/generate-plan'
   | '/api/plan-task-publish'
@@ -70,6 +118,7 @@ type PlannerApiStubEndpoint =
   | '/api/task-report-generate'
   | '/api/task-manage'
   | '/api/user-instruction'
+  | '/api/payload'
 
 type ValidationResult =
   | { success: true }
@@ -88,7 +137,6 @@ const PLANNER_API_STUB_ENDPOINTS = new Set<string>([
 function canonicalPlannerApiStubEndpoint(
   pathname: string,
 ): PlannerApiStubEndpoint | null {
-  if (pathname === '/api/payload') return '/api/user-instruction'
   if (!PLANNER_API_STUB_ENDPOINTS.has(pathname)) return null
   return pathname as PlannerApiStubEndpoint
 }
@@ -181,6 +229,8 @@ function validatePlannerApiStubBody(
         return TaskManageRequestSchema.safeParse(body)
       case '/api/user-instruction':
         return UserInstructionRequestSchema.safeParse(body)
+      case '/api/payload':
+        return PayloadRequestSchema.safeParse(body)
     }
   })()
 
@@ -245,7 +295,7 @@ function validatePlannerApiStubBody(
   }
 
   if (
-    endpoint === '/api/user-instruction' &&
+    (endpoint === '/api/user-instruction' || endpoint === '/api/payload') &&
     !stringField(bodyRecord, 'plan_id') &&
     !execIdField(bodyRecord)
   ) {
@@ -261,85 +311,6 @@ function validatePlannerApiStubBody(
   }
 
   return { success: true }
-}
-
-function statusForTaskOperation(operation: unknown): string {
-  switch (operation) {
-    case 'START':
-    case 'RESTART':
-      return 'PENDING'
-    case 'PAUSE':
-      return 'PAUSED'
-    case 'CONTINUE':
-      return 'RUNNING'
-    case 'TERMINATION':
-      return 'TERMINATED'
-    default:
-      return 'ACCEPTED'
-  }
-}
-
-function buildPlannerApiStubData(
-  endpoint: PlannerApiStubEndpoint,
-  requestId: string,
-  body: unknown,
-): Record<string, unknown> {
-  const bodyRecord = recordFromBody(body)
-  const base = {
-    request_id: requestId,
-    endpoint,
-    accepted: true,
-    stub: true,
-  }
-
-  switch (endpoint) {
-    case '/api/generate-plan':
-      return {
-        ...base,
-        plan_id: stringField(bodyRecord, 'plan_id'),
-        plan_status: 'STUB_ACCEPTED',
-      }
-    case '/api/plan-task-publish':
-      return {
-        ...base,
-        plan_id: stringField(bodyRecord, 'plan_id'),
-        publish_status: 'STUB_ACCEPTED',
-      }
-    case '/api/case-publish':
-      return {
-        ...base,
-        plan_id: stringField(bodyRecord, 'plan_id'),
-        exec_id: execIdField(bodyRecord),
-        task_id: execIdField(bodyRecord),
-        case_status: 'STUB_ACCEPTED',
-      }
-    case '/api/task-report-generate':
-      return {
-        ...base,
-        exec_id: execIdField(bodyRecord),
-        task_id: execIdField(bodyRecord),
-        task_status: 'PENDING',
-        report_status: 'PENDING',
-      }
-    case '/api/task-manage':
-      return {
-        ...base,
-        exec_id: execIdField(bodyRecord),
-        task_id: execIdField(bodyRecord),
-        task_operation: stringField(bodyRecord, 'task_operation'),
-        task_status: statusForTaskOperation(bodyRecord.task_operation),
-      }
-    case '/api/user-instruction':
-      return {
-        ...base,
-        plan_id: stringField(bodyRecord, 'plan_id'),
-        exec_id: execIdField(bodyRecord),
-        task_id: execIdField(bodyRecord),
-        message_id: requestId,
-        finished: true,
-        content: 'Planner API stub accepted the user instruction.',
-      }
-  }
 }
 
 async function writePlannerApiStubLog(entry: Record<string, unknown>) {
@@ -381,7 +352,7 @@ export async function handlePlannerApiStubRequest(
     canonical_endpoint: endpoint,
     query: url.search,
     headers: selectedHeaders(request),
-    stub: true,
+    stub: false,
   }
 
   if (request.method !== 'POST') {
@@ -427,7 +398,9 @@ export async function handlePlannerApiStubRequest(
     )
   }
 
-  return jsonApiResponse(
-    apiSuccess(buildPlannerApiStubData(endpoint, requestId, body)),
-  )
+  const result = await dispatchPlannerApiReal(endpoint, requestId, body)
+  if (result.code === 0 && result.data) {
+    return jsonApiResponse(apiSuccess(result.data, result.message), result.httpStatus)
+  }
+  return jsonApiResponse(apiError(result.code, result.message), result.httpStatus)
 }

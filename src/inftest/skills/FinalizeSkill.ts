@@ -1,4 +1,5 @@
 import { ProxyClient } from '../adapters/ProxyClient.js'
+import { reportPlanFinalStatusWithUpload } from '../planFinalReporter.js'
 import type { InfTestSkill, SkillInput, SkillResult } from './types.js'
 
 export class FinalizeSkill implements InfTestSkill {
@@ -8,15 +9,14 @@ export class FinalizeSkill implements InfTestSkill {
   constructor(private readonly proxyClient = new ProxyClient()) {}
 
   async run(input: SkillInput): Promise<SkillResult> {
-    await this.proxyClient.reportTaskUpdate({
-      event_id: `${input.task_id}:stateful:finalize`,
+    // COMPLETED is planner-owned and has no AgentName mapping for
+    // proxy-update-task-status; per-agent status is already reported at REFLECTING.
+    await reportPlanFinalStatusWithUpload({
       task_id: input.task_id,
       task_status: 'SUCCESS',
-      current_stage: 'COMPLETED',
+      workspace: input.workspace,
       message: 'Stateful runner completed',
-      stage_operations: [],
-      case_node_operations: [],
-      case_detail_operations: [],
+      proxy_client: this.proxyClient,
     })
     return {
       status: 'SUCCESS',

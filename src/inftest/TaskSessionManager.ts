@@ -314,6 +314,36 @@ export function finishSessionFromStatefulResult(
   })
 }
 
+/**
+ * Applies a stateful runner result without finishing the session when the runner
+ * stopped early (stop_after_stage). Preserves PAUSED + current_stage for case-publish
+ * / task-report-generate wait loops.
+ */
+export function applyStatefulRunnerResult(
+  manager: TaskSessionManager,
+  taskId: string,
+  result: InfTestStatefulRunnerResult,
+): TaskSession {
+  if (result.stopped_after_stage) {
+    const existing = manager.get(taskId)
+    if (!existing) {
+      throw new Error(`No task session for ${taskId}`)
+    }
+    const patched = manager.patch(taskId, {
+      status: 'PAUSED',
+      current_stage: result.stopped_after_stage,
+      workspace: result.workspace,
+      artifacts: { ...existing.artifacts, ...result.artifacts },
+      active_skill: null,
+    })
+    if (!patched) {
+      throw new Error(`No task session for ${taskId}`)
+    }
+    return patched
+  }
+  return finishSessionFromStatefulResult(manager, taskId, result)
+}
+
 export function finishSessionFromQueryResult(
   manager: TaskSessionManager,
   taskId: string,

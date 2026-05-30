@@ -30,6 +30,7 @@ export const InfTestConfigSchema = z.strictObject({
   provider: InfTestProviderSchema.optional(),
   orchestration: InfTestOrchestrationSchema.optional(),
   runner: z.enum(['fake', 'query', 'available', 'stateful']).optional(),
+  real_only: z.boolean().optional(),
   model: InfTestModelConfigSchema.optional(),
   server: InfTestServerConfigSchema.optional(),
   proxy: InfTestProxyConfigSchema.optional(),

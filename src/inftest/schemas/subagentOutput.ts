@@ -22,6 +22,7 @@ export const SubAgentOutputJsonSchema = z.strictObject({
     .strictObject({
       duration_ms: z.number().nonnegative().optional(),
       total_tokens: z.number().int().nonnegative().optional(),
+      case_count: z.number().int().nonnegative().optional(),
     })
     .optional(),
   error: SubAgentErrorSchema.nullable().optional(),

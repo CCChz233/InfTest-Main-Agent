@@ -59,6 +59,15 @@ def should_use_mock_mode() -> bool:
     }
 
 
+def is_real_only_mode() -> bool:
+    return os.environ.get("INFTEST_REAL_ONLY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def iter_device_bound_cases(device_case_bind: Path) -> list[dict[str, Any]]:
     data = read_json(device_case_bind)
     device_case = data.get("device_case", {}) if isinstance(data, dict) else {}
@@ -162,11 +171,25 @@ def build_mock_case_result(task_id: str, device_case_bind: Path) -> dict[str, An
     return {"cases": rows}
 
 
-def find_case_result(workspace: Path, agent_cwd: Path) -> Path | None:
+def find_case_result(workspace: Path, agent_cwd: Path, stdout: str = "") -> Path | None:
     explicit = os.environ.get("INFTEST_EXECUTION_CASE_RESULT", "").strip()
     candidates = []
     if explicit:
         candidates.append(Path(explicit))
+    _, response_body = extract_run_api_response(stdout)
+    if response_body:
+        for key in ("case_result_path", "structured_json_path"):
+            value = response_body.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(Path(value.strip()))
+        case_results = response_body.get("case_results")
+        if isinstance(case_results, list):
+            for case_result in case_results:
+                if not isinstance(case_result, dict):
+                    continue
+                value = case_result.get("case_result_path")
+                if isinstance(value, str) and value.strip():
+                    candidates.append(Path(value.strip()))
     candidates.extend(
         [
             workspace / "execution" / "results" / "case_result.json",
@@ -266,7 +289,43 @@ def write_summary(task_id: str, case_result_path: Path, summary_path: Path) -> N
     )
 
 
-def build_command(args: argparse.Namespace, device_case_bind: Path, workspace: Path, agent_cwd: Path) -> list[str]:
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def load_user_instruction_text(workspace: Path) -> str:
+    path = workspace / "input" / "user_instruction.json"
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            instruction = str(payload.get("user_instruction") or "").strip()
+            qa_list = payload.get("plan_qa_list")
+            parts = [instruction] if instruction else []
+            if isinstance(qa_list, list):
+                for item in qa_list:
+                    if not isinstance(item, dict):
+                        continue
+                    question = str(item.get("question") or "").strip()
+                    answer = str(item.get("answer") or "").strip()
+                    if question or answer:
+                        parts.append(f"Q: {question}\nA: {answer}")
+            text = "\n\n".join(parts).strip()
+            if text:
+                return text
+    return os.environ.get("INFTEST_USER_INSTRUCTION", "").strip()
+
+
+def build_command(
+    args: argparse.Namespace,
+    device_case_bind: Path,
+    workspace: Path,
+    agent_cwd: Path,
+    user_payload: str = "",
+) -> list[str]:
     explicit = os.environ.get("INFTEST_EXECUTION_AGENT_COMMAND", "").strip()
     if explicit:
         return shlex.split(explicit) + [
@@ -283,7 +342,7 @@ def build_command(args: argparse.Namespace, device_case_bind: Path, workspace: P
             device_case_bind,
             workspace / "execution" / "inputs" / "test_cases.md",
         )
-        return [
+        cmd = [
             python_bin,
             script,
             "--case",
@@ -291,11 +350,14 @@ def build_command(args: argparse.Namespace, device_case_bind: Path, workspace: P
             "--json",
             str(workspace / "execution" / "results" / "case_result.json"),
         ]
+        if user_payload:
+            cmd.extend(["--user-payload", user_payload])
+        return cmd
 
     user_id = os.environ.get("INFTEST_EXECUTION_USER_ID", "u001")
     project_id = os.environ.get("INFTEST_PROJECT_ID", "xh")
     model = os.environ.get("INFTEST_EXECUTION_MODEL", "glm-4.7")
-    return [
+    cmd = [
         python_bin,
         script,
         "execute",
@@ -314,6 +376,9 @@ def build_command(args: argparse.Namespace, device_case_bind: Path, workspace: P
         "--enable-multimodal-attribution",
         env_bool("INFTEST_ENABLE_MULTIMODAL_ATTRIBUTION"),
     ]
+    if user_payload:
+        cmd.extend(["--user-payload", user_payload])
+    return cmd
 
 
 def main() -> int:
@@ -321,6 +386,7 @@ def main() -> int:
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--output-json", required=True)
+    parser.add_argument("--user-payload", default="")
     args = parser.parse_args()
 
     started = time.time()
@@ -351,6 +417,23 @@ def main() -> int:
         return 1
 
     if should_use_mock_mode():
+        if is_real_only_mode():
+            write_json(
+                output_json,
+                {
+                    "success": False,
+                    "agent_name": "test_executor",
+                    "status": "FAILED",
+                    "task_id": args.task_id,
+                    "artifacts": {},
+                    "metrics": {"duration_ms": int((time.time() - started) * 1000)},
+                    "error": {
+                        "code": "REAL_ONLY_DISALLOW_EXECUTION_MOCK",
+                        "message": "INFTEST_REAL_ONLY is enabled, execution mock mode is forbidden.",
+                    },
+                },
+            )
+            return 1
         invocation_path = logs_dir / "real_execution_agent_invocation.json"
         stdout_path = logs_dir / "real_execution_agent.stdout.log"
         stderr_path = logs_dir / "real_execution_agent.stderr.log"
@@ -449,7 +532,13 @@ def main() -> int:
         )
         return 1
 
-    cmd = build_command(args, device_case_bind, workspace, agent_cwd)
+    cmd = build_command(
+        args,
+        device_case_bind,
+        workspace,
+        agent_cwd,
+        user_payload=args.user_payload.strip() or load_user_instruction_text(workspace),
+    )
     invocation_path = logs_dir / "real_execution_agent_invocation.json"
     write_json(invocation_path, {"cwd": str(agent_cwd), "argv": cmd})
 
@@ -489,7 +578,7 @@ def main() -> int:
         )
         return 1
 
-    case_result_source = find_case_result(workspace, agent_cwd)
+    case_result_source = find_case_result(workspace, agent_cwd, proc.stdout)
     if proc.returncode != 0:
         write_json(
             output_json,
